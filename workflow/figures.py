@@ -58,15 +58,18 @@ def main():
         elif g=="display":
             cmd=[sys.executable,REPO/"plots/display_panels.py",data/"si_display",job]
             stems=["Figure_"+i+"_revised" for i in ids];loc=job
+        elif g.startswith("fcs_"):
+            script,stems=R_PLOTS[g]
+            cmd=[a.rscript,"--vanilla",REPO/"plots"/script,root,job]
+            loc=job
         else:
             script,stems=R_PLOTS[g]
-            body=(root/"code"/script if g.startswith("fcs_") else REPO/("plots" if g=="coverage" else "native/revision")/script).read_text(encoding="utf-8")
+            body=(REPO/("plots" if g=="coverage" else "native/revision")/script).read_text(encoding="utf-8")
             # Redirect plot outputs only. Keep the original source tables read-only.
             import re
             body=re.sub(r'out\s*<-\s*file.path\(root,\s*["\x27]figures["\x27]\)',"out<-commandArgs(trailingOnly=TRUE)[2]",body)
             body=body.replace('fig<-file.path(root,"figures")','fig<-commandArgs(trailingOnly=TRUE)[2]')
             body=body.replace('file.path(root,"figures",paste0(', 'file.path(commandArgs(trailingOnly=TRUE)[2],paste0(')
-            body=re.sub(r'out<-file.path\(follow,"(?:inference|quality)_figures"\);stopifnot\(!dir.exists\(out\)\);dir.create\(out\)',"out<-commandArgs(trailingOnly=TRUE)[2]",body)
             scriptpath=job/script;scriptpath.write_text(body,encoding="utf-8")
             cmd=[a.rscript,"--vanilla",scriptpath,root,job];loc=job
         subprocess.run([str(x) for x in cmd],check=True)

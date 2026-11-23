@@ -125,3 +125,12 @@ Rscript --vanilla workflow/external_models.R "$E/pI_with_full_taxonomy_lake_v3.t
 ```
 
 For FCS-GX screening, `workflow/deposition_qc.py --help` describes the analytical FASTA, digest and taxid manifest. This operation produces reports. Subsequent contig dispositions require the reviewed decisions and reference sequences. Supplying S6 to `stage.py` installs its original follow-up scripts and frozen sensitivity tables in the study layout. S27/S28 use that frozen stage. Deposition copies and archived analytical references must keep their identities throughout.
+
+The S6 ecological sensitivity changes the retained MAGs or their functional annotations while holding the original mapping reference fixed. The public matrix script compares its baseline with all twelve archived response matrices. Include `--fit` to rerun the four catalogues' exact tests, dispersion checks and module analyses. The phylogenetic script separately refits each archived tree after pruning the flagged genome identified by the local action table. Both commands write to new directories.
+
+```bash
+REV="$P/Major_revised_FM/R1_20261110"
+python workflow/fcs_matrices.py --project "$P" --out ../s6-models --fit
+Rscript --vanilla native/revision/fcs_phylogenetic_sensitivity.R "$REV" ../s6-trees
+Rscript --vanilla plots/fcs_inference_figures.R "$REV" ../s6-figure ../s6-models ../s6-trees
+```

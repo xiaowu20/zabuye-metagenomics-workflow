@@ -70,7 +70,7 @@ Run the printed plan within a Linux compute allocation. The `reads` branch downl
 | Identical-input assembly, binning and coverage comparisons | `run.py sensitivity` | 29 assembly tasks, three-binner runs, strategy-specific catalogues, matched groups and Nonpareil diagnostics |
 | Organismal phylogeny | `run.py trees`, `run.py replay` | Protein and codon trees, Pagel’s λ and within-lineage PGLS |
 | Environmental, carrier and external analyses | `run.py study-models`, `fresh_model_inputs.py`, `external_models.R` | Paired fits, salinity conditioning, additive carrier contrasts and external lake-level models |
-| Deposition sensitivity | `deposition_qc.py`, locally staged S6 scripts | FCS-GX reports and fixed-reference analyses for the frozen S6 stage |
+| Deposition sensitivity | `deposition_qc.py`, `fcs_matrices.py`, `native/revision/fcs_phylogenetic_sensitivity.R` | FCS-GX reports, fixed-reference ecological models and pruned-tree fits using the reviewed S6 inputs |
 | Display and artwork comparison | `figures.py`, `artwork.py` | Numbered redraws, local checksums and optional export of the Word-embedded figures |
 
 The figure runner has a separate source-table entry point. An optional Figure 1a script also draws the two lakes, relief and sampling stations from the archived map layers and S1. Field chemistry, optical measurements, historical reference files and author artwork have their own provenance. The release checks exercised downstream fits and redraws with study inputs. The computationally intensive route from all 35 raw libraries was not rerun end to end for this code release.

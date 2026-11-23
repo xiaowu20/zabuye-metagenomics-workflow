@@ -15,7 +15,7 @@
 | S24 | `tree` | S5 protein/nucleotide tree comparisons and within-lineage model outputs. |
 | S25 | `covariates` | S5 sequencing-coverage covariate diagnostics and omission models. |
 | S26 | `matches` | S5 reciprocal-ANI population matches, abundances and concordance summaries. |
-| S27, S28 | `fcs_quality`, `fcs_inference` | S6 review-stage quality and fixed-reference inference tables, plus the plotting code staged from S6. |
+| S27, S28 | `fcs_quality`, `fcs_inference` | S6 review-stage quality and fixed-reference inference tables. Both R plotting scripts are in `plots/`. For S28, optional arguments select freshly refitted ecological and phylogenetic models. |
 
 The optional Figure 1a cartography program uses the archived regional-map drawing code and joins the station coordinates from S1. Its local layer directory contains the four compressed SRTM tiles, six regional relief tiles, lake and stream geometries, grassland masks, the provincial boundary layer and the map settings. The thematic locator used the GS(2023)2766 standard map as its boundary reference. The watercourse arrows use the direction of decreasing elevation. The public script reads these layers from disk. The workbook-only Figure 1 route requires no GIS software or map layers.
 
