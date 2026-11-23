@@ -1,0 +1,24 @@
+# Only code and its documentation belong in the public history.
+*
+!/.gitignore
+!/.gitattributes
+!/LICENSE
+!/README.md
+!/docs/
+!/docs/*.md
+!/env/
+!/env/*.yml
+!/env/requirements.txt
+!/workflow/
+!/workflow/*.py
+!/workflow/*.R
+!/plots/
+!/plots/*.py
+!/plots/*.R
+!/native/
+!/native/*/
+!/native/*/*.R
+!/native/*/*.py
+!/native/*/*.in
+!/tests/
+!/tests/*.py

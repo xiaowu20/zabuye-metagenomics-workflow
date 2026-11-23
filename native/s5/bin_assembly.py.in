@@ -1,0 +1,129 @@
+"""Common three-binner workflow for all newly assembled paired14 catalogues."""
+import csv, json, os, subprocess, sys, time, tempfile, shutil, hashlib, socket
+from pathlib import Path
+
+BASE = Path('@PROJECT@')
+ROOT = BASE/'Major_revised_FM/R1_20261110'
+task = json.loads((ROOT/'inputs/assembly_tasks.json').read_text())[int(sys.argv[1])]
+assembly = ROOT/'assemblies'/task['assembler']/task['sample']
+source = assembly/('final.contigs.fa' if task['assembler']=='megahit' else 'contigs.fasta')
+out = ROOT/'binning'/f"{task['assembler']}_{task['sample']}"
+out.mkdir(parents=True, exist_ok=True)
+if (out/'COMPLETE.txt').exists(): sys.exit(0)
+assert source.is_file() and source.stat().st_size, source
+samples = list(csv.DictReader((ROOT/'inputs/paired14.tsv').open(),delimiter='\t'))
+threads = int(os.environ['SLURM_CPUS_PER_TASK'])
+env=os.environ.copy()
+env['PATH']='@CONDA@/envs/binning/bin:'+env['PATH']
+env['PYTHONPATH']=str(ROOT/'envs/concoct_compat')
+env['OPENBLAS_NUM_THREADS']='1';env['MKL_NUM_THREADS']='1'
+
+def run(cmd, marker=None, stdout=None):
+    if marker is not None and marker.exists(): return
+    with (out/'commands.jsonl').open('a') as f:
+        f.write(json.dumps({'time':time.time(),'command':cmd,'stdout':str(stdout) if stdout else None})+'\n')
+    if stdout:
+        with Path(stdout).open('w') as h: subprocess.run(cmd,env=env,check=True,stdout=h)
+    else: subprocess.run(cmd,env=env,check=True)
+    if marker is not None: marker.write_text('complete\n')
+
+contigs=out/'contigs_min500.fa'
+if contigs.exists() and not (out/'assembly_stats.json').exists():
+    assert ROOT.resolve() in contigs.resolve().parents
+    contigs.unlink()
+if not contigs.exists():
+    name=None;seq=[];lengths=[]
+    with source.open() as inp,contigs.open('w') as dst:
+        for line in inp:
+            if line.startswith('>'):
+                if name and len(''.join(seq))>=500:
+                    s=''.join(seq);dst.write(name+'\n'+s+'\n');lengths.append(len(s))
+                name=line.strip();seq=[]
+            else: seq.append(line.strip())
+        if name and len(''.join(seq))>=500:
+            s=''.join(seq);dst.write(name+'\n'+s+'\n');lengths.append(len(s))
+    lengths.sort(reverse=True);total=sum(lengths);cumulative=0;n50=0
+    for n in lengths:
+        cumulative+=n
+        if cumulative>=total/2:n50=n;break
+    (out/'assembly_stats.json').write_text(json.dumps({'n_contigs':len(lengths),'total_bp':total,'N50':n50,'minimum_retained_length':500},indent=2))
+
+depth=out/'depth.tsv'
+run(['cut_up_fasta.py',str(contigs),'-c','10000','-o','0','--merge_last','-b',str(out/'contigs_10K.bed')],out/'cutup.done',out/'contigs_10K.fa')
+if not ((out/'depth.done').exists() and (out/'coverage.done').exists()):
+    index=out/'index';logdir=out/'bam';logdir.mkdir(exist_ok=True)
+    run(['bowtie2-build','--threads',str(threads),str(contigs),str(index)],out/'index.done')
+    scratch=Path(tempfile.mkdtemp(prefix=f'FM_R1_bin_{os.environ.get("SLURM_JOB_ID","local")}_',dir='/tmp'))
+    (out/'scratch_location.json').write_text(json.dumps({'host':socket.gethostname(),'path':str(scratch),'purpose':'Regenerable BAM and sort files only'},indent=2))
+    def sha256(p):
+        h=hashlib.sha256()
+        with p.open('rb') as f:
+            for block in iter(lambda:f.read(8*1024**2),b''):h.update(block)
+        return h.hexdigest()
+    bams=[]
+    try:
+        for sample in samples:
+            bam=scratch/f"{sample['sample']}.sorted.bam";bams.append(str(bam))
+            previous=logdir/bam.name
+            for partial in logdir.glob(bam.name+'.tmp.*'):
+                assert ROOT.resolve() in partial.resolve().parents
+                with (out/'scratch_migration.jsonl').open('a') as f:f.write(json.dumps({'discarded_partial_revision_sort_file':str(partial),'bytes':partial.stat().st_size})+'\n')
+                partial.unlink()
+            if previous.with_suffix('.bam.done').exists() and previous.exists():
+                shutil.copy2(previous,bam)
+                digest=sha256(previous)
+                assert sha256(bam)==digest,'Scratch migration changed BAM'
+                run(['samtools','quickcheck','-v',str(bam)])
+                run(['samtools','index','-@','4',str(bam)])
+                with (out/'scratch_migration.jsonl').open('a') as f:f.write(json.dumps({'source':str(previous),'destination':str(bam),'sha256':digest,'host':socket.gethostname()})+'\n')
+                assert ROOT.resolve() in previous.resolve().parents
+                previous.unlink()
+                previous.with_suffix('.bam.bai').unlink(missing_ok=True)
+            else:
+                # This is a partial output created by the cancelled revision job, not an input.
+                if previous.exists():
+                    assert ROOT.resolve() in previous.resolve().parents
+                    with (out/'scratch_migration.jsonl').open('a') as f:f.write(json.dumps({'discarded_partial_revision_BAM':str(previous),'bytes':previous.stat().st_size})+'\n')
+                    previous.unlink()
+                cmd=['bowtie2','--very-sensitive','-x',str(index),'-1',sample['r1'],'-2',sample['r2'],'-p',str(max(1,threads-4))]
+                sortcmd=['samtools','sort','-@','4','-m','2G','-o',str(bam),'-']
+                with (out/'commands.jsonl').open('a') as f:f.write(json.dumps({'time':time.time(),'pipeline':[cmd,sortcmd]})+'\n')
+                with (logdir/f"{sample['sample']}.mapping.log").open('w') as log:
+                    process=subprocess.Popen(cmd,env=env,stdout=subprocess.PIPE,stderr=log)
+                    sorter=subprocess.run(sortcmd,env=env,stdin=process.stdout)
+                    process.stdout.close();status=process.wait()
+                if status or sorter.returncode:raise RuntimeError(f'Mapping/sorting failed for {sample["sample"]}')
+                run(['samtools','quickcheck','-v',str(bam)])
+                run(['samtools','index','-@','4',str(bam)])
+                previous.with_suffix('.bam.done').write_text('Complete mapping; regenerable BAM held on node-local scratch\n')
+        run(['jgi_summarize_bam_contig_depths','--outputDepth',str(depth),*bams],out/'depth.done')
+        run(['concoct_coverage_table.py',str(out/'contigs_10K.bed'),*bams],out/'coverage.done',out/'coverage.tsv')
+    finally:
+        assert scratch.parent==Path('/tmp') and scratch.name.startswith('FM_R1_bin_')
+        shutil.rmtree(scratch)
+for binner in ['metabat2','maxbin2','concoct_bins','dastool3']:(out/binner).mkdir(exist_ok=True)
+run(['metabat2','-i',str(contigs),'-a',str(depth),'-o',str(out/'metabat2/bin'),'-t',str(threads),'-m','1500','--seed','20261110'],out/'metabat2.done')
+abundfiles=[]
+with depth.open() as f:
+    rd=csv.reader(f,delimiter='\t');header=next(rd);records=list(rd)
+for col in range(3,len(header),2):
+    target=out/f'abundance_{col}.tsv';abundfiles.append(str(target))
+    with target.open('w') as f:
+        for row in records:f.write(f'{row[0]}\t{row[col]}\n')
+(out/'abundance_files.txt').write_text('\n'.join(abundfiles)+'\n')
+run(['run_MaxBin.pl','-contig',str(contigs),'-abund_list',str(out/'abundance_files.txt'),'-out',str(out/'maxbin2/bin'),'-thread',str(threads)],out/'maxbin2.done')
+run(['concoct','--composition_file',str(out/'contigs_10K.fa'),'--coverage_file',str(out/'coverage.tsv'),'-b',str(out/'concoct')+'/', '-t',str(threads),'-l','1500','--seed','20261110'],out/'concoct.done')
+run(['merge_cutup_clustering.py',str(out/'concoct/clustering_gt1500.csv')],out/'merge_concoct.done',out/'concoct/clustering_merged.csv')
+run(['extract_fasta_bins.py',str(contigs),str(out/'concoct/clustering_merged.csv'),'--output_path',str(out/'concoct_bins')],out/'extract_concoct.done')
+for binner,ext in [('metabat2','fa'),('maxbin2','fasta'),('concoct_bins','fa')]:
+    dest=out/f'{binner}_s2b.tsv'
+    with dest.open('w') as f:
+        for p in sorted((out/binner).glob('*.'+ext)):
+            for line in p.open():
+                if line.startswith('>'):f.write(f'{line[1:].split()[0]}\t{p.stem}\n')
+inputs=[out/f'{x}_s2b.tsv' for x in ['metabat2','maxbin2','concoct_bins']]
+assert all(p.stat().st_size for p in inputs),'At least one binner produced no bins; inspect separately'
+run(['DAS_Tool','-i',','.join(map(str,inputs)),'-l','metabat2,maxbin2,concoct','-c',str(contigs),'-o',str(out/'dastool3/refined'),'-t',str(threads),'--score_threshold','0.5','--write_bins','--write_bin_evals'],out/'dastool.done')
+env['PATH']='@CONDA@/envs/checkm2/bin:'+env['PATH']
+run(['checkm2','predict','--input',str(out/'dastool3/refined_DASTool_bins'),'--output-directory',str(out/'checkm2'),'--extension','fa','--threads',str(threads),'--database_path',str(BASE/'db/checkm2/CheckM2_database/uniref100.KO.1.dmnd')],out/'checkm2.done')
+(out/'COMPLETE.txt').write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z')+'\n')

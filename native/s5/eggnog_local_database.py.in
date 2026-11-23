@@ -1,0 +1,67 @@
+"""Stage byte-identical reference files on node-local disk for SQLite annotation."""
+from contextlib import contextmanager
+from pathlib import Path
+import datetime, hashlib, json, os, shutil, socket, tempfile
+
+
+def checksum(path):
+    digest=hashlib.sha256()
+    with Path(path).open('rb') as handle:
+        for block in iter(lambda:handle.read(16*1024**2),b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@contextmanager
+def staged_database(source, receipt_dir):
+    source=Path(source)
+    receipt_dir=Path(receipt_dir)
+    job=os.environ.get('SLURM_JOB_ID','manual')
+    names=['eggnog.db','eggnog_proteins.dmnd','eggnog.taxa.db','eggnog.taxa.db.traverse.pkl']
+    originals=[source/name for name in names]
+    assert all(p.is_file() for p in originals)
+    needed=sum(p.stat().st_size for p in originals)
+    scratch=Path(tempfile.mkdtemp(prefix=f'FM_R1_eggnog_{job}_',dir='/tmp')).resolve()
+    assert scratch.parent==Path('/tmp').resolve() and scratch.name.startswith(f'FM_R1_eggnog_{job}_')
+    receipt=receipt_dir/f'eggnog_local_staging_{job}.json'
+    record=dict(time=datetime.datetime.now().astimezone().isoformat(),host=socket.gethostname(),
+        job=job,source=str(source),scratch=str(scratch),files=[],
+        scientific_parameters_unchanged=True,completed=False)
+    try:
+        free=shutil.disk_usage(scratch).free
+        record['initial_scratch_free_bytes']=free
+        record['database_bytes']=needed
+        if free < needed+32*1024**3:
+            record['mode']='shared_database_fallback_insufficient_local_space'
+            data_dir=source
+        else:
+            record['mode']='verified_local_copy'
+            data_dir=scratch/'database'
+            data_dir.mkdir()
+            for p in originals:
+                before=p.stat()
+                dest=data_dir/p.name
+                digest=hashlib.sha256()
+                with p.open('rb') as src,dest.open('wb') as dst:
+                    for block in iter(lambda:src.read(16*1024**2),b''):
+                        dst.write(block)
+                        digest.update(block)
+                after=p.stat()
+                assert (before.st_size,before.st_mtime_ns)==(after.st_size,after.st_mtime_ns),p
+                assert dest.stat().st_size==before.st_size
+                expected=digest.hexdigest()
+                assert checksum(dest)==expected,p
+                record['files'].append(dict(source=str(p),local=str(dest),bytes=before.st_size,sha256=expected))
+                receipt.write_text(json.dumps(record,indent=2))
+        temp=scratch/'temp'
+        temp.mkdir()
+        receipt.write_text(json.dumps(record,indent=2))
+        yield data_dir,temp
+        record['completed']=True
+    finally:
+        # Only this uniquely created and resolved node-local directory is removed.
+        assert scratch.parent==Path('/tmp').resolve() and scratch.name.startswith(f'FM_R1_eggnog_{job}_')
+        shutil.rmtree(scratch)
+        record['scratch_removed']=True
+        record['finished']=datetime.datetime.now().astimezone().isoformat()
+        receipt.write_text(json.dumps(record,indent=2))

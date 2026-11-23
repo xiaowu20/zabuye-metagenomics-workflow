@@ -1,0 +1,75 @@
+"""Source-qualified gene calls, eggNOG annotation and frozen module scoring."""
+import csv,json,os,subprocess,sys,time
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+from module_scoring_source import calculate,scores
+from eggnog_local_database import staged_database
+
+BASE=Path('@PROJECT@')
+ROOT=BASE/'Major_revised_FM/R1_20261110'
+group=sys.argv[1];cat=ROOT/'catalogues'/group;out=cat/'annotation';out.mkdir(exist_ok=True)
+if (out/'COMPLETE.txt').exists():sys.exit(0)
+genomes=[Path(x) for x in (cat/'genomes.txt').read_text().splitlines()]
+pred=out/'prodigal';pred.mkdir(exist_ok=True)
+threads=int(os.environ['SLURM_CPUS_PER_TASK'])
+def predict(p):
+    mag=p.stem;faa=pred/f'{mag}.faa';gff=pred/f'{mag}.gff'
+    if faa.with_suffix('.done').exists():return mag,faa
+    prefixed=pred/f'{mag}.fa'
+    with prefixed.open('w') as dst,p.open() as src:
+        for line in src:
+            dst.write(f'>{mag}__{line[1:].split()[0]}\n' if line.startswith('>') else line)
+    cmd=['@CONDA@/envs/assembly/bin/prodigal',
+      '-i',str(prefixed),'-a',str(faa),'-d',str(pred/f'{mag}.fna'),'-f','gff','-o',str(gff),'-p','meta','-q']
+    with (pred/f'{mag}.log').open('w') as log:subprocess.run(cmd,check=True,stderr=log)
+    faa.with_suffix('.done').write_text('complete\n')
+    return mag,faa
+with ThreadPoolExecutor(max_workers=min(threads,32)) as pool: proteins=list(pool.map(predict,genomes))
+allfaa=out/'proteins_source_qualified.faa';querymag={}
+with allfaa.open('w') as dst,(out/'query_to_mag.tsv').open('w') as mp:
+    mp.write('query\tmag_id\n')
+    for mag,faa in proteins:
+        for line in faa.open():
+            if line.startswith('>'):
+                q=line[1:].split()[0]
+                assert q not in querymag,q
+                querymag[q]=mag;mp.write(f'{q}\t{mag}\n')
+            dst.write(line)
+env=os.environ.copy()
+env['PATH']='@CONDA@/envs/eggnog/bin:'+env['PATH']
+if not (out/'eggnog.done').exists():
+    with staged_database(BASE/'db/eggnog',out) as (database,temp):
+        cmd=['emapper.py','-i',str(allfaa),'--itype','proteins','--data_dir',str(database),
+          '-m','diamond','--cpu',str(threads),'--target_orthologs','all','--tax_scope','auto',
+          '--output','catalogue','--output_dir',str(out),'--temp_dir',str(temp),'--override']
+        (out/'emapper_command.json').write_text(json.dumps(cmd,indent=2))
+        subprocess.run(cmd,check=True,env=env)
+    (out/'eggnog.done').write_text('complete\n')
+members=pd.read_csv(ROOT/'inputs/zby_ko_panel_members_v3.csv')
+defs=pd.read_csv(ROOT/'inputs/module_definitions_corrected.csv')
+panel=sorted(members.KO.unique()); mags=sorted(p.stem for p in genomes)
+counts=pd.DataFrame(0,index=mags,columns=panel,dtype=int)
+with (out/'catalogue.emapper.annotations').open() as f,(out/'panel_gene_hits.tsv').open('w') as hits:
+    hits.write('query\tmag_id\tKO\n')
+    for line in f:
+        if line.startswith('#'):continue
+        row=line.rstrip('\n').split('\t')
+        assert len(row)>11 and row[0] in querymag,row[:1]
+        for ko in sorted(set(row[11].replace('ko:','').split(','))):
+            if ko in counts.columns:
+                counts.at[querymag[row[0]],ko]+=1
+                hits.write(f'{row[0]}\t{querymag[row[0]]}\t{ko}\n')
+counts.index.name='mag_id';counts.to_csv(out/'panel_KO_gene_counts.tsv',sep='\t')
+catalog=pd.read_csv(cat/'representative_quality.tsv',sep='\t')
+catalog['gtdb_phylum']='not_assigned';catalog['gtdb_genus']='not_assigned'
+long=calculate(counts>0,defs,members,catalog,empty_member_fix=True)
+long.to_csv(out/'module_status_long.tsv',sep='\t',index=False)
+graded,complete=scores(long)
+graded.to_csv(out/'MAG_module_scores.tsv',sep='\t')
+complete.to_csv(out/'MAG_module_complete.tsv',sep='\t')
+(out/'summary.json').write_text(json.dumps({'MAGs':len(mags),'proteins':len(querymag),'modules':len(graded.columns),
+ 'gene_prediction':'Prodigal meta; source-qualified contig and protein identifiers',
+ 'scoring':'Frozen corrected module definitions; empty-member parsing fix enabled',
+ 'taxonomy':'Not assigned by this workflow; not used for module matrix statistics'},indent=2))
+(out/'COMPLETE.txt').write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z')+'\n')

@@ -1,0 +1,81 @@
+options(warn=1)
+suppressPackageStartupMessages({library(tidyverse); library(readxl)})
+set.seed(20260720)
+
+B <- "@PROJECT@/db/qxlsg"
+PI_OUT <- "@PROJECT@/packages/pkg_CC_protein_pI_qxlsg"
+
+mag_summary <- read_tsv(file.path(PI_OUT,"MAG_level_pI_summary_qxlsg.tsv"), show_col_types=FALSE)
+cat("pI数据MAG数:", nrow(mag_summary), "\n")
+
+## ---------- 完整GTDB-Tk分类(本次新跑, 覆盖全部5866) ----------
+bac <- read_tsv(file.path(B,"gtdbtk_out_v25/classify/gtdbtk.bac120.summary.tsv"), show_col_types=FALSE)
+arc <- read_tsv(file.path(B,"gtdbtk_out_v25/classify/gtdbtk.ar53.summary.tsv"), show_col_types=FALSE)
+tax <- bind_rows(bac, arc) %>%
+  select(mag_id=user_genome, classification) %>%
+  separate(classification, into=c("Domain","Phylum","Class","Order","Family","Genus","Species"),
+           sep=";", fill="right") %>%
+  mutate(across(everything(), ~str_remove(.x, "^[a-z]__")))
+cat("完整分类表MAG数:", nrow(tax), "\n")
+cat("Halobacteriota总数(全量, 未按pI筛):", sum(tax$Phylum=="Halobacteriota", na.rm=TRUE), "\n")
+write_tsv(tax, file.path(PI_OUT,"qxlsg_full_gtdbtk_taxonomy.tsv"))
+
+qxlsg_pI <- mag_summary %>% inner_join(tax, by="mag_id")
+cat("pI+完整分类联合表行数:", nrow(qxlsg_pI), "\n")
+cat("Halobacteriota MAG数(有pI数据):", sum(qxlsg_pI$Phylum=="Halobacteriota", na.rm=TRUE), "\n")
+
+## ---------- Halobacteriota vs 其他门 ----------
+cat("\n=== Halobacteriota vs 其他门(完整分类, n=", nrow(qxlsg_pI), ") ===\n")
+grp <- qxlsg_pI %>% mutate(group=ifelse(Phylum=="Halobacteriota","Halobacteriota","Other phyla"))
+print(grp %>% group_by(group) %>%
+      summarise(n=n(), median_pI=median(median_pI), mean_pI=mean(median_pI),
+                mean_acidic_minus_basic=mean(acidic_minus_basic)))
+if (sum(grp$group=="Halobacteriota") >= 3) {
+  cat("\nWilcoxon(pI):\n"); print(wilcox.test(median_pI ~ group, data=grp))
+  cat("\nWilcoxon(acidic-basic):\n"); print(wilcox.test(acidic_minus_basic ~ group, data=grp))
+}
+
+## ---------- 门水平pI排序总览(类比正文3.3节Fig3a的全门对比) ----------
+cat("\n=== 各门pI分布(n>=5的门) ===\n")
+phylum_summary <- qxlsg_pI %>% filter(!is.na(Phylum)) %>%
+  group_by(Phylum) %>% summarise(n=n(), median_pI=median(median_pI), .groups="drop") %>%
+  filter(n>=5) %>% arrange(median_pI)
+print(phylum_summary, n=30)
+write_tsv(phylum_summary, file.path(PI_OUT,"qxlsg_pI_by_phylum_full.tsv"))
+
+## ---------- 盐度回归: 用完整分类版本重复, 核对是否与v2一致 ----------
+lakes_raw <- read_excel(file.path(B,"QXLSG_mmc2.xlsx"), sheet="Sheet1", skip=1)
+lakes10 <- lakes_raw %>% group_by(Abbreviation, Lake) %>%
+  summarise(mean_salinity=mean(`Salinity/%`), .groups="drop")
+prefix_map <- c(grc="GRC", ce="CE", nmc="NMC", slc="SLC", dzc="DZC",
+                adec="ADEC", lgc="LGC", cmc="CMC", dqc="DQC", eyc="EYC")
+sal <- qxlsg_pI %>%
+  mutate(prefix=str_extract(mag_id,"^[a-z]+(?=_bin)"), Abbreviation=prefix_map[prefix]) %>%
+  left_join(lakes10, by="Abbreviation") %>% filter(!is.na(Abbreviation)) %>%
+  mutate(log_sal=log10(mean_salinity))
+cat("\n=== 盐度回归(完整分类版, n=", nrow(sal), ") ===\n")
+# Environmental inference uses independent lakes. Fit hierarchical sensitivity models with external_models.R.
+
+lake_level <- sal %>% group_by(Abbreviation, Lake, mean_salinity) %>%
+  summarise(mean_pI=mean(median_pI), n_mags=n(), .groups="drop") %>% mutate(log_sal=log10(mean_salinity))
+cat("\n=== 湖泊级(n=", nrow(lake_level), ") ===\n"); print(lake_level %>% arrange(mean_salinity))
+print(summary(lm(mean_pI ~ log_sal, data=lake_level)))
+cat("Pearson R(湖泊级):", cor(lake_level$mean_pI, lake_level$log_sal), "\n")
+
+write_tsv(sal, file.path(PI_OUT,"pI_with_full_taxonomy_lake_v3.tsv"))
+cat("\n完成\n")
+
+## ---------- 补充: 限制到高盐湖(>4%)后重新对比 ----------
+cat("\n\n===== 补充分析: 仅高盐湖(QXLSG自定义阈值>4%)的Halobacteriota vs其他门 =====\n")
+sal_hi <- sal %>% filter(mean_salinity > 4)
+cat("高盐湖MAG数:", nrow(sal_hi), "\n")
+cat("其中Halobacteriota数:", sum(sal_hi$Phylum=="Halobacteriota", na.rm=TRUE), "\n")
+
+grp_hi <- sal_hi %>% mutate(group=ifelse(Phylum=="Halobacteriota","Halobacteriota","Other phyla"))
+print(grp_hi %>% group_by(group) %>%
+      summarise(n=n(), median_pI=median(median_pI), mean_acidic_minus_basic=mean(acidic_minus_basic)))
+if (sum(grp_hi$group=="Halobacteriota") >= 3) {
+  print(wilcox.test(median_pI ~ group, data=grp_hi))
+} else {
+  cat("高盐湖Halobacteriota样本量过小(<3), 无法做检验\n")
+}

@@ -1,0 +1,62 @@
+import re, os, sys
+from Bio.SeqUtils.ProtParam import ProteinAnalysis
+
+FAA_DIR = "@PROJECT@/db/refdb/qxlsg_faa"
+OUT = "@PROJECT@/packages/pkg_CC_protein_pI_qxlsg/protein_pI_summary.tsv"
+os.makedirs(os.path.dirname(OUT), exist_ok=True)
+
+VALID_AA = set("ACDEFGHIKLMNPQRSTVWY")
+faa_files = sorted(f for f in os.listdir(FAA_DIR) if f.endswith(".faa"))
+print(f"待处理MAG(faa文件)数: {len(faa_files)}", flush=True)
+
+n_total = n_processed = n_skipped_short = n_skipped_error = 0
+first_errors_shown = 0
+
+def process_record(mag_id, header, seq, fout):
+    global n_processed, n_skipped_short, n_skipped_error, first_errors_shown
+    if not header:
+        return
+    seq = seq.upper().replace("*", "")
+    seq_clean = "".join(c for c in seq if c in VALID_AA)
+    if len(seq_clean) < 20:
+        n_skipped_short += 1
+        return
+    try:
+        analysis = ProteinAnalysis(seq_clean)
+        pI = analysis.isoelectric_point()
+        aa_percent = analysis.amino_acids_percent
+        acidic = aa_percent.get("D", 0) + aa_percent.get("E", 0)
+        basic = aa_percent.get("K", 0) + aa_percent.get("R", 0) + aa_percent.get("H", 0)
+        fout.write(f"{mag_id}\t{header}\t{len(seq_clean)}\t{pI:.3f}\t{acidic:.4f}\t{basic:.4f}\n")
+        n_processed += 1
+    except Exception as e:
+        n_skipped_error += 1
+        if first_errors_shown < 5:
+            print(f"错误示例: mag={mag_id} header={header} error={repr(e)}", file=sys.stderr)
+            first_errors_shown += 1
+
+with open(OUT, "w") as fout:
+    fout.write("mag_id\tprotein_id\tlength\tpI\tacidic_fraction\tbasic_fraction\n")
+    for fi, fname in enumerate(faa_files):
+        mag_id = fname[:-4]  # 去掉 .faa 后缀, 文件名本身就是MAG ID(如 adec_bin.100)
+        header, seq_lines = None, []
+        with open(os.path.join(FAA_DIR, fname)) as fin:
+            for line in fin:
+                if line.startswith(">"):
+                    if header:
+                        process_record(mag_id, header, "".join(seq_lines), fout)
+                        n_total += 1
+                    header = line[1:].strip().split()[0]
+                    seq_lines = []
+                else:
+                    seq_lines.append(line.strip())
+            if header:
+                process_record(mag_id, header, "".join(seq_lines), fout)
+                n_total += 1
+        if (fi + 1) % 200 == 0:
+            print(f"已处理MAG {fi+1}/{len(faa_files)} (累计序列 {n_total}, 成功 {n_processed})", flush=True)
+
+print(f"\n总序列数: {n_total}")
+print(f"成功计算: {n_processed}")
+print(f"跳过(过短): {n_skipped_short}")
+print(f"跳过(计算异常): {n_skipped_error}")

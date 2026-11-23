@@ -1,0 +1,79 @@
+"""Reciprocal ANI for the three controlled method comparisons.
+
+This complements, rather than replaces, matching to the archived 269 MAGs.
+Each comparison fixes either input reads plus downstream methods, or the archived
+assembly plus quality filtering and dereplication. No biological absence is inferred.
+"""
+import csv
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
+ROOT = Path('@REVISION@')
+OUT = ROOT / 'results/controlled_catalogue_comparisons'
+OUT.mkdir(parents=True, exist_ok=True)
+PAIRS = [
+    ('binner', 'original_ZBY_water_das2_matched', 'original_ZBY_water_das3'),
+    ('pooling', 'pooled_megahit14', 'single_megahit14'),
+    ('assembler', 'single_megahit14', 'single_metaspades14'),
+]
+FASTANI = '@CONDA@/envs/assembly/bin/fastANI'
+
+for comparison, reference, alternative in PAIRS:
+    out = OUT / comparison
+    out.mkdir(exist_ok=True)
+    if (out / 'COMPLETE.txt').exists():
+        continue
+    for group in (reference, alternative):
+        cat = ROOT / 'catalogues' / group
+        assert (cat / 'COMPLETE.txt').exists(), group
+        assert all(Path(p).is_file() for p in (cat / 'genomes.txt').read_text().splitlines())
+    lists = {g: ROOT / 'catalogues' / g / 'genomes.txt' for g in (reference, alternative)}
+    for direction, query, target in [('alternative_to_reference', alternative, reference),
+                                      ('reference_to_alternative', reference, alternative)]:
+        dest = out / f'{direction}.tsv'
+        if dest.with_suffix('.done').exists():
+            continue
+        command = [FASTANI, '--ql', str(lists[query]), '--rl', str(lists[target]),
+                   '-t', os.environ.get('SLURM_CPUS_PER_TASK', '32'), '-o', str(dest)]
+        (out / f'{direction}_command.json').write_text(json.dumps(command, indent=2))
+        subprocess.run(command, check=True)
+        dest.with_suffix('.done').write_text('complete\n')
+    hits = {}
+    for direction in ('alternative_to_reference', 'reference_to_alternative'):
+        for line in (out / f'{direction}.tsv').read_text().splitlines():
+            q, r, ani, n, total = line.split('\t')
+            q, r = Path(q).stem, Path(r).stem
+            alt, ref = (q, r) if direction == 'alternative_to_reference' else (r, q)
+            hits.setdefault((alt, ref), {})[direction] = (float(ani), int(n) / int(total))
+    fields = ['comparison', 'reference_catalogue', 'alternative_catalogue', 'alternative_MAG',
+              'reference_MAG', 'ANI_alt_to_ref', 'ANI_ref_to_alt', 'AF_alt', 'AF_ref',
+              'reciprocal_ANI_min', 'AF_max', 'AF_min', 'match95_AF30', 'match99_AF30',
+              'match95_AF65', 'match95_minAF30']
+    with (out / 'reciprocal_matches.tsv').open('w') as f:
+        writer = csv.DictWriter(f, fieldnames=fields, delimiter='\t')
+        writer.writeheader()
+        for (alt, ref), h in sorted(hits.items()):
+            a, b = h.get('alternative_to_reference'), h.get('reference_to_alternative')
+            amin = min(a[0], b[0]) if a and b else None
+            fmax = max(a[1], b[1]) if a and b else None
+            fmin = min(a[1], b[1]) if a and b else None
+            writer.writerow(dict(comparison=comparison, reference_catalogue=reference,
+                alternative_catalogue=alternative, alternative_MAG=alt, reference_MAG=ref,
+                ANI_alt_to_ref=a[0] if a else None, ANI_ref_to_alt=b[0] if b else None,
+                AF_alt=a[1] if a else None, AF_ref=b[1] if b else None,
+                reciprocal_ANI_min=amin, AF_max=fmax, AF_min=fmin,
+                match95_AF30=bool(amin is not None and amin >= 95 and fmax >= .30),
+                match99_AF30=bool(amin is not None and amin >= 99 and fmax >= .30),
+                match95_AF65=bool(amin is not None and amin >= 95 and fmax >= .65),
+                match95_minAF30=bool(amin is not None and amin >= 95 and fmin >= .30)))
+    (out / 'definition.json').write_text(json.dumps(dict(comparison=comparison,
+        reference=reference, alternative=alternative,
+        matching='Both ANI directions required; use minimum ANI and explicitly named aligned-fraction rule.',
+        inference='A reciprocal match is an operational sequence correspondence, not identity at strain resolution.'), indent=2))
+    (out / 'COMPLETE.txt').write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z') + '\n')
+    print(comparison, 'reciprocal ANI complete', flush=True)
+
+(OUT / 'ANI_COMPLETE.txt').write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z') + '\n')

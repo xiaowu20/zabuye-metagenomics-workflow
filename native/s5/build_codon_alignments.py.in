@@ -1,0 +1,98 @@
+"""Strict CDS matching, PAL2NAL backtranslation and paired AA/NT alignment construction."""
+import csv, json, os, subprocess
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.Data import CodonTable
+
+ROOT=Path('@REVISION@')
+gtdb=ROOT/'phylogeny/gtdb84_v251/identify/intermediate_results'
+out=ROOT/'phylogeny/codon84';out.mkdir(exist_ok=True)
+tips=(ROOT/'inputs/halo84_ids.txt').read_text().split()
+assert len(tips)==84 and len(set(tips))==84
+AA=set('ACDEFGHIKLMNPQRSTVWY')
+starts=set(CodonTable.unambiguous_dna_by_id[11].start_codons)
+lookup={};audit=[]
+for tip in tips:
+    base=gtdb/'marker_genes'/tip
+    proteins=list(SeqIO.parse(base/f'{tip}_protein.faa','fasta'))
+    cds={r.id:r for r in SeqIO.parse(base/f'{tip}_protein.fna','fasta')}
+    seqmap=defaultdict(list)
+    for p in proteins:seqmap[str(p.seq).rstrip('*')].append(p)
+    lookup[tip]=(seqmap,cds)
+
+markers=sorted((gtdb/'single_copy_fasta/ar53').glob('*.fa'))
+assert len(markers)==53,len(markers)
+jobs=[]
+for marker in markers:
+    m=marker.stem;work=out/m;work.mkdir(exist_ok=True)
+    retained={}
+    for record in SeqIO.parse(marker,'fasta'):
+        tip=record.id;aa=str(record.seq).rstrip('*');status='retained';gene_id='';nt='';start_adjusted=False
+        if tip not in lookup:continue
+        matches=lookup[tip][0].get(aa,[])
+        sequences={str(lookup[tip][1][x.id].seq) for x in matches if x.id in lookup[tip][1]}
+        if not matches or not sequences:status='no_exact_protein_CDS_match'
+        elif len(sequences)!=1:status='ambiguous_identical_protein_with_distinct_CDS'
+        elif set(aa)-AA:status='nonstandard_amino_acid'
+        else:
+            gene_id=matches[0].id;nt=next(iter(sequences)).upper()
+            if len(nt)%3:status='CDS_length_not_multiple_of_three'
+            elif set(nt)-set('ACGT'):status='ambiguous_nucleotide'
+            else:
+                translated=str(Seq(nt).translate(table=11))
+                if translated.endswith('*'):translated=translated[:-1];nt=nt[:-3]
+                if translated!=aa and aa.startswith('M') and nt[:3] in starts and translated[1:]==aa[1:]:
+                    if 'partial=0' in matches[0].description:translated='M'+translated[1:];start_adjusted=True
+                if translated!=aa:status='translation_mismatch'
+                elif '*' in translated:status='internal_stop'
+        audit.append(dict(marker=m,mag_id=tip,gene_id=gene_id,status=status,start_codon_adjusted=start_adjusted,aa_length=len(aa),cds_bp=len(nt)))
+        if status=='retained':retained[tip]=(aa,nt)
+    with (work/'proteins.faa').open('w') as a,(work/'coding.fna').open('w') as d:
+        for tip,(aa,nt) in retained.items():a.write(f'>{tip}\n{aa}\n');d.write(f'>{tip}\n{nt}\n')
+    if len(retained)>=42:jobs.append((m,work,retained))
+with (out/'CDS_validation.tsv').open('w') as f:
+    w=csv.DictWriter(f,fieldnames=audit[0],delimiter='\t');w.writeheader();w.writerows(audit)
+
+def align(job):
+    m,work,retained=job
+    cmd=['@CONDA@/envs/iqtree/bin/mafft','--auto','--thread','8',str(work/'proteins.faa')]
+    with (work/'aligned.faa').open('w') as a,(work/'mafft.log').open('w') as l:
+        subprocess.run(cmd,check=True,stdout=a,stderr=l)
+    cmd2=['pal2nal.pl',str(work/'aligned.faa'),str(work/'coding.fna'),'-output','fasta','-codontable','11']
+    with (work/'aligned.fna').open('w') as d,(work/'pal2nal.log').open('w') as l:
+        subprocess.run(cmd2,check=True,stdout=d,stderr=l)
+    (work/'commands.json').write_text(json.dumps([cmd,cmd2],indent=2))
+    aas={r.id:str(r.seq) for r in SeqIO.parse(work/'aligned.faa','fasta')}
+    nts={r.id:str(r.seq) for r in SeqIO.parse(work/'aligned.fna','fasta')}
+    assert set(aas)==set(nts)==set(retained),(m,'ID mismatch')
+    L=len(next(iter(aas.values())))
+    assert all(len(x)==L for x in aas.values()) and all(len(x)==3*L for x in nts.values()),m
+    columns=[i for i in range(L) if sum(a[i] in AA for a in aas.values())>=42]
+    kept_aa={t:''.join(aas.get(t,'-'*L)[i] for i in columns) for t in tips}
+    kept_nt={t:''.join(nts.get(t,'-'*(3*L))[3*i:3*i+3] for i in columns) for t in tips}
+    # PAL2NAL must preserve every retained input sequence after removal of alignment gaps.
+    for t in aas:
+        assert nts[t].replace('-','').upper()==retained[t][1],(m,t,'PAL2NAL nucleotide mismatch')
+    return m,kept_aa,kept_nt,dict(marker=m,genomes=len(aas),alignment_AA=L,retained_AA=len(columns),occupancy_threshold=42)
+
+with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(align,jobs))
+aa_concat={t:'' for t in tips};nt_concat={t:'' for t in tips};table=[];start=1
+for m,a,d,info in sorted(results):
+    for t in tips:aa_concat[t]+=a[t];nt_concat[t]+=d[t]
+    info.update(AA_start=start,AA_end=start+info['retained_AA']-1);start+=info['retained_AA'];table.append(info)
+with (out/'marker_alignment_summary.tsv').open('w') as f:
+    w=csv.DictWriter(f,fieldnames=table[0],delimiter='\t');w.writeheader();w.writerows(table)
+for name,data in [('matched_AA.faa',aa_concat),('matched_NT.fna',nt_concat)]:
+    with (out/name).open('w') as f:
+        for t in tips:f.write(f'>{t}\n{data[t]}\n')
+length=len(next(iter(nt_concat.values())))
+(out/'codon_positions.txt').write_text(''.join(f'DNA, position{i} = {i}-{length}\\3\n' for i in [1,2,3]))
+with (out/'tip_coverage.tsv').open('w') as f:
+    f.write('mag_id\tAA_sites_present\tAA_sites_total\tfraction\n')
+    for t in tips:
+        n=sum(c in AA for c in aa_concat[t]);L=len(aa_concat[t]);f.write(f'{t}\t{n}\t{L}\t{n/L}\n')
+(out/'alignment_summary.json').write_text(json.dumps({'tips':len(tips),'markers_input':53,'markers_retained':len(table),'AA_sites':length//3,'NT_sites':length,'CDS_pairs_retained':sum(r['status']=='retained' for r in audit),'CDS_pairs_excluded':sum(r['status']!='retained' for r in audit),'site_occupancy_minimum':42,'source_GTDB_release':'r226','source_GTDB_Tk':'2.5.1'},indent=2))
+print(json.loads((out/'alignment_summary.json').read_text()))

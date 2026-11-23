@@ -1,0 +1,93 @@
+"""Summarise recovery, reciprocal ANI and sample-specific population concordance."""
+import csv,json,subprocess,sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+from scipy.spatial.distance import pdist
+ROOT=Path('@REVISION@')
+OUT=ROOT/'results/assembly_sensitivity';OUT.mkdir(exist_ok=True)
+groups=['archival_original269','remapped_original269','original_ZBY_water_das2_matched','original_ZBY_water_das3','pooled_megahit14','single_megahit14','single_metaspades14']
+meta=pd.read_csv(ROOT/'inputs/paired14.tsv',sep='\t').set_index('sample')
+ref=pd.read_csv(ROOT/'catalogues/archival_original269/responses/MAG_breadth50.tsv',sep='\t',index_col=0).loc[meta.index]
+recovery=[];coverage=[];tests=[];dispersions=[];features=[];matches=[];populations=[];concordance=[];carriers=[]
+binner_recovery=[]
+def corr(x,y):
+    return float(spearmanr(x,y).statistic) if np.std(x)>0 and np.std(y)>0 else np.nan
+def contrasts(v):
+    d=pd.DataFrame({'value':v,'station':meta.station,'season':meta.season,'basin':meta.basin})
+    station=d.groupby(['station','basin'])['value'].mean().reset_index()
+    paired=d.pivot(index='station',columns='season',values='value')
+    return float((paired.spring-paired.autumn).mean()),float(station.loc[station.basin=='north','value'].mean()-station.loc[station.basin=='south','value'].mean())
+for group in groups:
+    cat=ROOT/'catalogues'/group
+    assert (cat/'statistics/COMPLETE.txt').exists(),group
+    q=pd.read_csv(cat/'representative_quality.tsv',sep='\t')
+    summary=json.loads((cat/'summary.json').read_text()) if (cat/'summary.json').exists() else {}
+    recovery.append(dict(catalogue=group,candidate_bins=summary.get('candidate_bins'),
+      quality_passing_bins=summary.get('quality_passing_bins'),dereplicated_MAGs=len(q),HQ=int((q.quality_tier=='HQ').sum()),MQ=int((q.quality_tier=='MQ').sum())))
+    if 'binner_origin' in q:
+        for binner,sub in q.groupby('binner_origin'):
+            binner_recovery.append(dict(catalogue=group,binner=binner,representatives=len(sub),
+              HQ=int((sub.quality_tier=='HQ').sum()),MQ=int((sub.quality_tier=='MQ').sum())))
+    coverage.append(pd.read_csv(cat/'responses/sample_QC.tsv',sep='\t'))
+    tests.append(pd.read_csv(cat/'statistics/PERMANOVA.tsv',sep='\t'))
+    dispersions.append(pd.read_csv(cat/'statistics/dispersion.tsv',sep='\t'))
+    features.append(pd.read_csv(cat/'statistics/module_basin_contrasts.tsv',sep='\t'))
+    if group.startswith(('archival_','remapped_')):continue
+    assert (cat/'ani/COMPLETE.txt').exists(),group
+    hits=pd.read_csv(cat/'ani/reciprocal_matches.tsv',sep='\t')
+    ab=pd.read_csv(cat/'responses/MAG_breadth50.tsv',sep='\t',index_col=0).loc[meta.index]
+    score=pd.read_csv(cat/'annotation/MAG_module_scores.tsv',sep='\t',index_col=0)
+    strict=pd.read_csv(cat/'annotation/MAG_module_complete.tsv',sep='\t',index_col=0)
+    for criterion in ['match95_AF30','match99_AF30','match95_AF65']:
+        h=hits.loc[hits[criterion].astype(str).str.lower()=='true'].copy()
+        matches.append(dict(catalogue=group,criterion=criterion,new_MAGs=len(q),original_MAGs=269,
+          matched_new_MAGs=h.new_MAG.nunique(),matched_original_MAGs=h.original_MAG.nunique()))
+    h=hits.loc[hits.match95_AF30.astype(str).str.lower()=='true'].copy()
+    best=h.sort_values(['new_MAG','reciprocal_ANI_min','AF_max','original_MAG'],ascending=[True,False,False,True]).drop_duplicates('new_MAG')
+    best.insert(0,'catalogue',group);best.to_csv(OUT/f'{group}_best_reciprocal_matches.tsv',sep='\t',index=False)
+    common=sorted(set(best.original_MAG)&set(ref.columns))
+    matched=pd.DataFrame(0.,index=meta.index,columns=common)
+    for old,rows in best.groupby('original_MAG'):
+        if old in matched:matched[old]=ab[rows.new_MAG].sum(axis=1)
+    matched.to_csv(OUT/f'{group}_abundance_matched_to_original.tsv',sep='\t',index_label='sample_id')
+    for old in common:
+        rows=best[best.original_MAG==old];x=ref[old];y=matched[old]
+        rs,rb=contrasts(x);ns,nb=contrasts(y)
+        populations.append(dict(catalogue=group,original_MAG=old,matched_new_MAGs=len(rows),
+          best_reciprocal_ANI=rows.reciprocal_ANI_min.max(),abundance_Spearman=corr(x,y),
+          original_mean_relative_abundance=x.mean(),new_mean_relative_abundance=y.mean(),
+          original_spring_minus_autumn=rs,new_spring_minus_autumn=ns,
+          original_north_minus_south=rb,new_north_minus_south=nb))
+    for sample in meta.index:
+        concordance.append(dict(catalogue=group,sample_id=sample,matched_original_MAGs=len(common),
+          abundance_Spearman=corr(ref.loc[sample,common],matched.loc[sample]),
+          reference_abundance_fraction_matched=ref.loc[sample,common].sum(),new_abundance_fraction_matched=matched.loc[sample].sum()))
+    # Main-text dominant carrier: functional states are recalculated from the new
+    # sequences, not transferred from its ANI match.
+    target=(ROOT/'inputs/focal_carrier.txt').read_text().strip()
+    tm=best.loc[best.original_MAG==target]
+    for row in tm.itertuples():
+        for module in score.columns:
+            ns,nb=contrasts(ab[row.new_MAG]*score.at[row.new_MAG,module])
+            carriers.append(dict(catalogue=group,original_MAG=target,new_MAG=row.new_MAG,module=module,
+              reciprocal_ANI_min=row.reciprocal_ANI_min,AF_max=row.AF_max,
+              new_graded_score=score.at[row.new_MAG,module],new_strict_complete=strict.at[row.new_MAG,module],
+              new_GMP_spring_minus_autumn=ns,new_GMP_north_minus_south=nb))
+for name,data in [('catalogue_recovery',pd.DataFrame(recovery)),('sample_coverage',pd.concat(coverage)),
+ ('representative_binner_origins',pd.DataFrame(binner_recovery)),
+ ('PERMANOVA_all_catalogues',pd.concat(tests)),('dispersion_all_catalogues',pd.concat(dispersions)),
+ ('module_basin_contrasts',pd.concat(features)),('ANI_recovery_summary',pd.DataFrame(matches)),
+ ('population_abundance_comparison',pd.DataFrame(populations)),('sample_abundance_concordance',pd.DataFrame(concordance)),
+ ('dominant_carrier_actual_new_annotations',pd.DataFrame(carriers))]:
+    data.to_csv(OUT/f'{name}.tsv',sep='\t',index=False)
+(OUT/'interpretation.json').write_text(json.dumps({
+ 'matching':'Reciprocal fastANI >=95%, maximum directional aligned fraction >=0.30; 99% and AF0.65 sensitivities also reported',
+ 'many_to_many_rule':'Each new representative assigned to its highest reciprocal ANI original hit, then AF_max, then original ID; multiple assigned representatives summed',
+ 'abundance_denominator':'Native fixed catalogue in each workflow. Correlations are descriptive and do not establish equality of absolute population abundance.',
+ 'absence':'No accepted match means not recovered/matched under this pipeline, not ecological absence.',
+ 'carrier_functions':'All new module states scored from new genes; none imputed through ANI'},indent=2))
+print(pd.DataFrame(recovery).to_string(index=False));print(pd.DataFrame(matches).to_string(index=False))
+subprocess.run([sys.executable, str(ROOT/'code/summarize_controlled_catalogues.py')], check=True)
+subprocess.run([sys.executable, str(ROOT/'code/summarize_assembly_contigs.py')], check=True)

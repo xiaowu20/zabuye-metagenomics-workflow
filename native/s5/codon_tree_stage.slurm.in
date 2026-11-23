@@ -1,0 +1,18 @@
+#!/bin/bash
+#SBATCH --job-name=FM_R1_tree_stage
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=64G
+#SBATCH --time=2-00:00:00
+#SBATCH --output=@REVISION@/logs/tree_stage_%j.out
+#SBATCH --error=@REVISION@/logs/tree_stage_%j.err
+set -euo pipefail
+ROOT=@REVISION@
+IQTREE=@CONDA@/envs/iqtree/bin/iqtree
+if [[ "$1" == AA ]]; then
+  "$IQTREE" -s "$ROOT/phylogeny/codon84/matched_AA.faa" -m MFP -B 1000 --alrt 1000 -T 32 --seed 20261110 --prefix "$ROOT/phylogeny/codon84/AA_BIC"
+elif [[ "$1" == NT ]]; then
+  "$IQTREE" -s "$ROOT/phylogeny/codon84/matched_NT.fna" -p "$ROOT/phylogeny/codon84/codon_positions.txt" -m MFP+MERGE -B 1000 --alrt 1000 -T 32 --seed 20261110 --prefix "$ROOT/phylogeny/codon84/NT_BIC"
+else
+  exit 2
+fi

@@ -1,0 +1,82 @@
+"""Quality-filter and dereplicate new catalogues without touching archived bins."""
+import csv, json, os, shutil, subprocess, sys, time
+from pathlib import Path
+
+BASE=Path('@PROJECT@')
+ROOT=BASE/'Major_revised_FM/R1_20261110'
+group=sys.argv[1]
+tasks=json.loads((ROOT/'inputs/assembly_tasks.json').read_text())
+sources={
+ 'single_megahit14':[f'megahit_{t["sample"]}' for t in tasks if t['assembler']=='megahit' and t['sample']!='pooled14'],
+ 'single_metaspades14':[f'metaspades_{t["sample"]}' for t in tasks if t['assembler']=='metaspades'],
+ 'pooled_megahit14':['megahit_pooled14'],
+ 'original_ZBY_water_das2_matched':['original_ZBY_water_das2'],
+ 'original_ZBY_water_das3':['original_ZBY_water'],
+ 'original_all_das3':['original_ZBY_water','original_ZBY_sed','original_DXC_water','original_DXC_sed']}
+out=ROOT/'catalogues'/group;out.mkdir(parents=True,exist_ok=True)
+if (out/'COMPLETE.txt').exists():sys.exit(0)
+bins=out/'quality_bins';bins.mkdir(exist_ok=True)
+records=[]
+for source in sources[group]:
+    b=ROOT/'binning'/source
+    if source=='original_ZBY_water_das2':
+        rows=[r for r in csv.DictReader((BASE/'07_checkm2/quality_report.tsv').open(),delimiter='\t')
+              if r['Name'].startswith('ZBY_water__')]
+    else:
+        assert (b/'COMPLETE.txt').exists(),f'Incomplete source {source}'
+        rows=list(csv.DictReader((b/'checkm2/quality_report.tsv').open(),delimiter='\t'))
+        selected=list(csv.DictReader((b/'dastool3/refined_DASTool_summary.tsv').open(),delimiter='\t'))
+        origin={r['bin']:r['bin_set'] for r in selected}
+        assert len(origin)==len(selected),'Ambiguous DAS Tool bin identity'
+    for row in rows:
+        c=float(row['Completeness']); x=float(row['Contamination'])
+        f=(BASE/'06_bins/all_dastool_bins'/f"{row['Name']}.fa") if source=='original_ZBY_water_das2' else b/'dastool3/refined_DASTool_bins'/f"{row['Name']}.fa"
+        assert f.is_file(),f
+        lengths=[];n=0
+        for line in f.open():
+            if line.startswith('>'):
+                if n:lengths.append(n)
+                n=0
+            else:n+=len(line.strip())
+        if n:lengths.append(n)
+        total=sum(lengths);acc=0;n50=0
+        for n in sorted(lengths,reverse=True):
+            acc+=n
+            if acc>=total/2:n50=n;break
+        mag=f'{source}__{f.stem}'
+        binner=(row['Name'].split('__',1)[1].split('_',1)[0] if source=='original_ZBY_water_das2' else origin[row['Name']])
+        passed=c>=50 and x<10 and total>=50000
+        records.append(dict(mag_id=mag,source_assembly=source,binner_origin=binner,completeness=c,contamination=x,
+            genome_size_bp=total,n50=n50,n_contigs=len(lengths),passes_filter=passed,
+            quality_tier=('HQ' if c>=90 and x<5 else 'MQ') if passed else 'excluded',source_file=str(f)))
+        if passed:
+            dest=bins/f'{mag}.fa'
+            if not dest.exists():dest.symlink_to(f)
+assert records and any(x['passes_filter'] for x in records)
+with (out/'candidate_quality.tsv').open('w') as f:
+    w=csv.DictWriter(f,fieldnames=records[0],delimiter='\t');w.writeheader();w.writerows(records)
+with (out/'genome_info.csv').open('w') as f:
+    w=csv.writer(f);w.writerow(['genome','completeness','contamination'])
+    for r in records:
+        if r['passes_filter']:w.writerow([r['mag_id']+'.fa',r['completeness'],r['contamination']])
+env=os.environ.copy()
+env['PATH']='@CONDA@/envs/binning/bin:'+env['PATH']
+env['PYTHONPATH']=str(ROOT/'envs/concoct_compat')
+cmd=['dRep','dereplicate',str(out/'drep'),'--genomes',*map(str,sorted(bins.glob('*.fa'))),
+ '--genomeInfo',str(out/'genome_info.csv'),'--ignoreGenomeQuality','--processors',os.environ.get('SLURM_CPUS_PER_TASK','32'),
+ '-pa','0.9','-sa','0.95','-nc','0.30','--S_algorithm','fastANI']
+(out/'drep_command.json').write_text(json.dumps(cmd,indent=2))
+subprocess.run(cmd,check=True,env=env)
+reps={p.stem for p in (out/'drep/dereplicated_genomes').glob('*.fa')}
+assert reps
+with (out/'representative_quality.tsv').open('w') as f:
+    w=csv.DictWriter(f,fieldnames=records[0],delimiter='\t');w.writeheader();w.writerows(r for r in records if r['mag_id'] in reps)
+(out/'genomes.txt').write_text(''.join(str(p)+'\n' for p in sorted((out/'drep/dereplicated_genomes').glob('*.fa'))))
+(out/'summary.json').write_text(json.dumps({'group':group,'sources':sources[group],'candidate_bins':len(records),
+ 'quality_passing_bins':sum(r['passes_filter'] for r in records),'dereplicated_MAGs':len(reps),
+ 'HQ_representatives':sum(r['mag_id'] in reps and r['quality_tier']=='HQ' for r in records),
+ 'quality_filtering':'Explicit completeness/contamination/length filter before dRep; dRep quality filtering disabled',
+ 'representative_selection':'Archived dRep ignoreGenomeQuality convention: N50 and centrality, not quality-weighted scoring',
+ 'thresholds':{'min_completeness':50,'max_contamination_exclusive':10,'min_length_bp':50000,
+ 'secondary_ANI':0.95,'primary_ANI':0.9,'alignment_fraction':0.30,'secondary_algorithm':'fastANI'}},indent=2))
+(out/'COMPLETE.txt').write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z')+'\n')

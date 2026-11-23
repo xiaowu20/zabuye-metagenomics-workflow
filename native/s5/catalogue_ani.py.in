@@ -1,0 +1,36 @@
+"""Reciprocal whole-genome ANI and aligned fractions against original ZBY269."""
+import csv,json,os,subprocess,sys,time
+from pathlib import Path
+BASE=Path('@PROJECT@');ROOT=BASE/'Major_revised_FM/R1_20261110'
+group=sys.argv[1];cat=ROOT/'catalogues'/group;out=cat/'ani';out.mkdir(exist_ok=True)
+if (out/'COMPLETE.txt').exists():sys.exit(0)
+old=[r for r in csv.DictReader((BASE/'packages/pkg_D_mag_qc/mag_catalogue_414_unified.tsv').open(),delimiter='\t') if r['source_assembly']=='ZBY_water']
+assert len(old)==269
+ref=[BASE/'09_drep/dereplicated_genomes'/f'{r["mag_id"]}.fa' for r in old]
+assert all(p.is_file() for p in ref)
+refs=out/'original269_genomes.txt';refs.write_text(''.join(str(p)+'\n' for p in ref))
+for label,q,r in [('new_to_original',cat/'genomes.txt',refs),('original_to_new',refs,cat/'genomes.txt')]:
+    dest=out/f'{label}.tsv'
+    if dest.with_suffix('.done').exists():continue
+    cmd=['@CONDA@/envs/assembly/bin/fastANI','--ql',str(q),'--rl',str(r),'-t',os.environ['SLURM_CPUS_PER_TASK'],'-o',str(dest)]
+    (out/f'{label}_command.json').write_text(json.dumps(cmd,indent=2))
+    subprocess.run(cmd,check=True)
+    dest.with_suffix('.done').write_text('complete\n')
+hits={}
+for label in ['new_to_original','original_to_new']:
+    for line in (out/f'{label}.tsv').open():
+        q,r,ani,n,total=line.rstrip().split('\t');q=Path(q).stem;r=Path(r).stem
+        new,old=(q,r) if label=='new_to_original' else (r,q)
+        hits.setdefault((new,old),{})[label]=(float(ani),int(n),int(total))
+with (out/'reciprocal_matches.tsv').open('w') as f:
+    fields=['new_MAG','original_MAG','ANI_new_to_original','ANI_original_to_new','AF_new','AF_original','reciprocal_ANI_min','AF_max','match95_AF30','match99_AF30','match95_AF65']
+    w=csv.writer(f,delimiter='\t');w.writerow(fields)
+    for (new,old),h in sorted(hits.items()):
+        a=h.get('new_to_original');b=h.get('original_to_new')
+        af=a[1]/a[2] if a else None;bf=b[1]/b[2] if b else None
+        ani=min(a[0],b[0]) if a and b else None
+        mx=max(af,bf) if a and b else None
+        w.writerow([new,old,a[0] if a else '',b[0] if b else '',af,bf,ani,mx,
+          bool(ani is not None and ani>=95 and mx>=.30),bool(ani is not None and ani>=99 and mx>=.30),
+          bool(ani is not None and ani>=95 and mx>=.65)])
+(out/'COMPLETE.txt').write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z')+'\n')

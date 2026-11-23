@@ -1,0 +1,33 @@
+"""Run one isolated, logged assembly. Inputs and outputs are immutable per task."""
+import json, os, subprocess, sys, time
+from pathlib import Path
+
+ROOT = Path('@REVISION@')
+task = json.loads((ROOT/'inputs/assembly_tasks.json').read_text())[int(sys.argv[1])]
+out = ROOT/'assemblies'/task['assembler']/task['sample']
+out.parent.mkdir(parents=True, exist_ok=True)
+receipt = ROOT/'provenance'/f"assembly_{task['assembler']}_{task['sample']}.json"
+threads = int(os.environ.get('SLURM_CPUS_PER_TASK', '32'))
+mem_mb = int(os.environ.get('SLURM_MEM_PER_NODE', '131072'))
+exe = Path('@CONDA@/envs/assembly/bin')
+if receipt.exists() and json.loads(receipt.read_text()).get('exit_code') == 0:
+    print('Completed receipt already exists', receipt); sys.exit(0)
+if out.exists():
+    raise RuntimeError(f'Refusing to overwrite incomplete output: {out}; inspect before explicit resume')
+if task['assembler'] == 'megahit':
+    cmd = [str(exe/'megahit'), '-1', task['r1'], '-2', task['r2'],
+           '-o', str(out), '-t', str(threads), '-m', str(int(mem_mb*1024**2*.85)),
+           '--min-contig-len', '500', '--k-list', '21,29,39,59,79,99,119,141']
+    final = out/'final.contigs.fa'
+else:
+    cmd = [str(exe/'spades.py'), '--meta', '-1', task['r1'], '-2', task['r2'],
+           '-o', str(out), '-t', str(threads), '-m', str(int(mem_mb/1024*.85))]
+    final = out/'contigs.fasta'
+record = dict(task=task, command=cmd, slurm_job=os.environ.get('SLURM_JOB_ID'), start=time.time())
+receipt.write_text(json.dumps(record, indent=2))
+result = subprocess.run(cmd)
+record.update(exit_code=result.returncode, end=time.time(), output=str(final),
+              output_bytes=final.stat().st_size if final.exists() else 0)
+receipt.write_text(json.dumps(record, indent=2))
+if result.returncode: sys.exit(result.returncode)
+if not final.exists() or not final.stat().st_size: raise RuntimeError('Empty assembly output')

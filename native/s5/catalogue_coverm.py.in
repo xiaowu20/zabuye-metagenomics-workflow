@@ -1,0 +1,20 @@
+"""Remap the same fourteen libraries to each fixed, strategy-specific catalogue."""
+import csv,json,os,subprocess,sys,time
+from pathlib import Path
+ROOT=Path('@REVISION@')
+group=sys.argv[1]; i=int(os.environ['SLURM_ARRAY_TASK_ID'])
+sample=list(csv.DictReader((ROOT/'inputs/paired14.tsv').open(),delimiter='\t'))[i]
+out=ROOT/'catalogues'/group/'coverm';out.mkdir(exist_ok=True)
+dest=out/f'{sample["sample"]}.tsv'
+if dest.with_suffix('.complete').exists():sys.exit(0)
+genomes=(ROOT/'catalogues'/group/'genomes.txt').read_text().splitlines()
+assert genomes and all(Path(x).is_file() for x in genomes)
+env=os.environ.copy();env['PATH']='@CONDA@/envs/assembly/bin:'+env['PATH']
+cmd=['coverm','genome','--coupled',sample['r1'],sample['r2'],'--genome-fasta-files',*genomes,
+ '--methods','mean','covered_fraction','relative_abundance','--min-covered-fraction','0',
+ '--min-read-percent-identity','0.95','--min-read-aligned-percent','0.75',
+ '--threads',os.environ['SLURM_CPUS_PER_TASK'],'--output-file',str(dest)]
+(out/f'{sample["sample"]}_command.json').write_text(json.dumps(cmd,indent=2))
+with (out/f'{sample["sample"]}.log').open('w') as log:subprocess.run(cmd,env=env,check=True,stderr=log)
+assert sum(1 for _ in dest.open())==len(genomes)+2
+dest.with_suffix('.complete').write_text(time.strftime('%Y-%m-%dT%H:%M:%S%z')+'\n')

@@ -1,0 +1,92 @@
+"""Descriptive population matching under explicitly controlled method contrasts."""
+from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
+
+ROOT = Path('@REVISION@')
+OUT = ROOT / 'results/controlled_catalogue_comparisons'
+assert (OUT / 'ANI_COMPLETE.txt').exists()
+meta = pd.read_csv(ROOT / 'inputs/paired14.tsv', sep='\t').set_index('sample')
+summaries, populations, bysample, directions = [], [], [], []
+
+
+def rho(x, y):
+    return float(spearmanr(x, y).statistic) if np.std(x) > 0 and np.std(y) > 0 else np.nan
+
+
+def contrasts(x):
+    d = meta[['station', 'season', 'basin']].copy()
+    d['value'] = np.asarray(x)
+    season = d.pivot(index='station', columns='season', values='value')
+    station = d.groupby(['station', 'basin']).value.mean().reset_index()
+    return float((season.spring - season.autumn).mean()), float(
+        station.loc[station.basin == 'north', 'value'].mean() -
+        station.loc[station.basin == 'south', 'value'].mean())
+
+
+for comparison in ['binner', 'pooling', 'assembler']:
+    folder = OUT / comparison
+    definition = json.loads((folder / 'definition.json').read_text())
+    refname, altname = definition['reference'], definition['alternative']
+    ref = pd.read_csv(ROOT / 'catalogues' / refname / 'responses/MAG_breadth50.tsv',
+                      sep='\t', index_col=0).loc[meta.index]
+    alt = pd.read_csv(ROOT / 'catalogues' / altname / 'responses/MAG_breadth50.tsv',
+                      sep='\t', index_col=0).loc[meta.index]
+    hits = pd.read_csv(folder / 'reciprocal_matches.tsv', sep='\t')
+    for criterion in ['match95_AF30', 'match99_AF30', 'match95_AF65', 'match95_minAF30']:
+        good = hits.loc[hits[criterion].astype(str).str.lower() == 'true'].copy()
+        summaries.append(dict(comparison=comparison, criterion=criterion,
+            reference_catalogue=refname, alternative_catalogue=altname,
+            reference_MAGs=len(ref.columns), alternative_MAGs=len(alt.columns),
+            matched_reference_MAGs=good.reference_MAG.nunique(),
+            matched_alternative_MAGs=good.alternative_MAG.nunique()))
+    good = hits.loc[hits.match95_AF30.astype(str).str.lower() == 'true'].copy()
+    best = good.sort_values(['alternative_MAG', 'reciprocal_ANI_min', 'AF_max', 'reference_MAG'],
+                            ascending=[True, False, False, True]).drop_duplicates('alternative_MAG')
+    best.to_csv(folder / 'best_reciprocal_matches.tsv', sep='\t', index=False)
+    common = sorted(best.reference_MAG.unique())
+    matched = pd.DataFrame(0., index=meta.index, columns=common)
+    pairpop = []
+    for genome, rows in best.groupby('reference_MAG'):
+        matched[genome] = alt[rows.alternative_MAG].sum(axis=1)
+        rs, rb = contrasts(ref[genome])
+        ns, nb = contrasts(matched[genome])
+        pairpop.append(dict(comparison=comparison, reference_MAG=genome,
+            matched_alternative_MAGs=len(rows), abundance_Spearman=rho(ref[genome], matched[genome]),
+            reference_mean_relative_abundance=ref[genome].mean(),
+            alternative_mean_relative_abundance=matched[genome].mean(),
+            reference_spring_minus_autumn=rs, alternative_spring_minus_autumn=ns,
+            reference_north_minus_south=rb, alternative_north_minus_south=nb))
+    populations.extend(pairpop)
+    matched.to_csv(folder / 'alternative_abundance_matched_to_reference.tsv', sep='\t', index_label='sample')
+    for sample in meta.index:
+        bysample.append(dict(comparison=comparison, sample_id=sample, matched_reference_MAGs=len(common),
+            abundance_Spearman=rho(ref.loc[sample, common], matched.loc[sample]) if common else np.nan,
+            reference_abundance_fraction_matched=ref.loc[sample, common].sum(),
+            alternative_abundance_fraction_matched=matched.loc[sample].sum()))
+    p = pd.DataFrame(pairpop)
+    for term in ['spring_minus_autumn', 'north_minus_south']:
+        x, y = (p[f'{k}_{term}'] if len(p) else pd.Series(dtype=float) for k in ['reference', 'alternative'])
+        nonzero = (x.abs() > 1e-12) & (y.abs() > 1e-12)
+        agree = (np.sign(x[nonzero]) == np.sign(y[nonzero]))
+        directions.append(dict(comparison=comparison, contrast=term, matched_reference_MAGs=len(p),
+            nonzero_contrasts_in_both=int(nonzero.sum()), same_direction=int(agree.sum()),
+            fraction_same_direction=float(agree.mean()) if nonzero.any() else np.nan,
+            contrast_Spearman=rho(x, y) if len(p) else np.nan,
+            zero_tolerance=1e-12))
+
+for name, records in [('recovery_summary', summaries), ('population_concordance', populations),
+                      ('sample_concordance', bysample), ('contrast_direction_summary', directions)]:
+    pd.DataFrame(records).to_csv(OUT / f'{name}.tsv', sep='\t', index=False)
+(OUT / 'interpretation.json').write_text(json.dumps(dict(
+    catalogue_denominator='Each method retains its native fixed catalogue and normalisation; absolute abundance is not measured.',
+    matching='Require reciprocal ANI >=95% and max directional AF >=0.30; three stricter sensitivity definitions are supplied.',
+    assignment='Assign each alternative representative to its highest reciprocal ANI reference, then AF_max, then ID. Sum alternative abundances assigned to the same reference.',
+    direction='Descriptive signs of mean paired spring-minus-autumn and station-mean north-minus-south contrasts. Exclude magnitudes <=1e-12 in either method from the agreement denominator.',
+    inference='Matched genomes and their correlations are not independent replicates. Direction agreement does not demonstrate strain identity, absolute abundance equality, or adaptive causation.'
+), indent=2))
+(OUT / 'COMPLETE.txt').write_text('complete\n')
+print(pd.DataFrame(summaries).to_string(index=False))
+print(pd.DataFrame(directions).to_string(index=False))

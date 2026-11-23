@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=dual_species
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=220G
+#SBATCH --time=24:00:00
+#SBATCH --array=0-34%8
+#SBATCH --output=@PROJECT@/dual_species_reanalysis_20260819/logs/classify_%A_%a.out
+#SBATCH --error=@PROJECT@/dual_species_reanalysis_20260819/logs/classify_%A_%a.err
+
+set -euo pipefail
+source @CONDA@/etc/profile.d/conda.sh
+conda activate assembly
+
+BASE=@PROJECT@
+RUN_ROOT=${BASE}/dual_species_reanalysis_20260819
+PLUSPF_DB=${BASE}/db/kraken2
+REGIONAL_DB=${RUN_ROOT}/db/regional_species
+SAMPLE_LIST=${RUN_ROOT}/input/sample_list.txt
+SAMPLE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "${SAMPLE_LIST}")
+R1=${BASE}/01_fastp/${SAMPLE}.R1.clean.fastq.gz
+R2=${BASE}/01_fastp/${SAMPLE}.R2.clean.fastq.gz
+PF=${RUN_ROOT}/classification/pluspf
+RG=${RUN_ROOT}/classification/regional_residual
+TMP_BASE=${TMPDIR:-${RUN_ROOT}/tmp}
+TMP=${TMP_BASE}/dual_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${SAMPLE}
+THREADS=${SLURM_CPUS_PER_TASK}
+
+mkdir -p "${PF}" "${RG}" "${TMP}" "${RUN_ROOT}/versions"
+trap 'rm -rf "${TMP}"' EXIT
+test -s "${R1}" && test -s "${R2}"
+test -s "${PLUSPF_DB}/database150mers.kmer_distrib"
+test -s "${REGIONAL_DB}/database150mers.kmer_distrib"
+
+kraken2 --db "${PLUSPF_DB}" --threads "${THREADS}" --paired --gzip-compressed \
+  --confidence 0.10 --report "${PF}/${SAMPLE}.report" \
+  --unclassified-out "${TMP}/${SAMPLE}#.fq" --output /dev/null "${R1}" "${R2}"
+
+if [[ ! -s "${TMP}/${SAMPLE}_1.fq" || ! -s "${TMP}/${SAMPLE}_2.fq" ]]; then
+  echo "Missing or empty PlusPF residual FASTQ pair for ${SAMPLE}" >&2
+  ls -lah "${TMP}" >&2
+  exit 1
+fi
+printf '%s\t%s\t%s\n' "${SAMPLE}" \
+  "$(stat -c %s "${TMP}/${SAMPLE}_1.fq")" \
+  "$(stat -c %s "${TMP}/${SAMPLE}_2.fq")" \
+  > "${RUN_ROOT}/logs/${SAMPLE}_residual_fastq_bytes.tsv"
+kraken2 --db "${REGIONAL_DB}" --threads "${THREADS}" --paired \
+  --confidence 0.10 --report "${RG}/${SAMPLE}.report" --output /dev/null \
+  "${TMP}/${SAMPLE}_1.fq" "${TMP}/${SAMPLE}_2.fq"
+
+for RANK in S G; do
+  bracken -d "${PLUSPF_DB}" -i "${PF}/${SAMPLE}.report" \
+    -o "${PF}/${SAMPLE}.${RANK}.bracken.tsv" -r 150 -l "${RANK}" -t 10
+  bracken -d "${REGIONAL_DB}" -i "${RG}/${SAMPLE}.report" \
+    -o "${RG}/${SAMPLE}.${RANK}.bracken.tsv" -r 150 -l "${RANK}" -t 10
+done
+
+{
+  printf 'sample_id\tpluspf_report\tregional_residual_report\n'
+  printf '%s\t%s\t%s\n' "${SAMPLE}" "${PF}/${SAMPLE}.report" "${RG}/${SAMPLE}.report"
+} > "${RUN_ROOT}/logs/${SAMPLE}_completion.tsv"

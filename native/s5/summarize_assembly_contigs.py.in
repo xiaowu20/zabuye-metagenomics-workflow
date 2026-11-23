@@ -1,0 +1,52 @@
+"""Collect existing length-filtered assembly summaries without rerunning assembly."""
+from pathlib import Path
+import argparse
+import csv
+import datetime
+import hashlib
+import json
+import statistics
+
+parser = argparse.ArgumentParser()
+parser.add_argument('root', nargs='?', default='@REVISION@')
+args = parser.parse_args()
+root = Path(args.root)
+tasks = json.loads((root / 'inputs/assembly_tasks.json').read_text())
+assert len(tasks) == 29
+rows, sources = [], {}
+for task in tasks:
+    key = task['assembler'] + '_' + task['sample']
+    status = root / 'provenance' / ('assembly_' + key + '.json')
+    assert json.loads(status.read_text())['exit_code'] == 0, key
+    source = root / 'binning' / key / 'assembly_stats.json'
+    data = json.loads(source.read_text())
+    assert data['minimum_retained_length'] == 500, key
+    assert data['n_contigs'] > 0 and 500 <= data['N50'] <= data['total_bp']
+    rows.append(dict(assembler=task['assembler'], sample=task['sample'],
+        input_libraries=14 if task['sample'] == 'pooled14' else 1,
+        retained_contigs=data['n_contigs'], retained_total_bp=data['total_bp'],
+        retained_N50_bp=data['N50'], minimum_retained_length_bp=500))
+    for p in [status, source]:
+        sources[p.relative_to(root).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+out = root / 'results/assembly_sensitivity'
+out.mkdir(parents=True, exist_ok=True)
+with (out / 'assembly_contig_statistics.tsv').open('w', newline='') as handle:
+    writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter='\t')
+    writer.writeheader()
+    writer.writerows(rows)
+summaries = []
+for assembler in ['megahit', 'metaspades']:
+    subset = [r for r in rows if r['assembler'] == assembler and r['input_libraries'] == 1]
+    assert len(subset) == 14
+    summary = dict(assembler=assembler, independent_assemblies=14)
+    for column in ['retained_contigs', 'retained_total_bp', 'retained_N50_bp']:
+        values = [r[column] for r in subset]
+        summary[column] = dict(min=min(values), median=statistics.median(values), max=max(values))
+    summaries.append(summary)
+record = dict(checked_at=datetime.datetime.now().astimezone().isoformat(),
+    assembly_count=29, single_library_summaries=summaries,
+    pooled14=next(r for r in rows if r['sample'] == 'pooled14'), source_SHA256=sources,
+    definition='All metrics describe contigs retained at length >=500 bp in the shared binning input. N50 is the contig length at which cumulative length reaches half of the retained assembly length.',
+    interpretation='Descriptive assembly size and continuity only. These values do not establish sequence accuracy, taxonomic completeness, or ecological equivalence. Assemblies share source populations and must not be summed as unique genomes.')
+(out / 'assembly_contig_statistics_provenance.json').write_text(json.dumps(record, indent=2))
+print(json.dumps({k: v for k, v in record.items() if k != 'source_SHA256'}, indent=2))

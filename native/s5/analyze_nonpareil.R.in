@@ -1,0 +1,74 @@
+suppressPackageStartupMessages({library(Nonpareil);library(ggplot2);library(dplyr);library(tidyr);library(patchwork)})
+root <- commandArgs(trailingOnly=TRUE)[1]
+out <- file.path(root,"results/nonpareil");dir.create(out,recursive=TRUE,showWarnings=FALSE)
+meta <- read.delim(file.path(root,"inputs/paired14.tsv"))
+curves <- setNames(lapply(meta$sample,function(s) {
+  stopifnot(file.exists(file.path(root,"nonpareil355",s,"COMPLETE.txt")))
+  Nonpareil.curve(file.path(root,"nonpareil355",s,paste0(s,".npo")),plot=FALSE,label=s,col="#25282B")
+}),meta$sample)
+stats <- bind_rows(lapply(names(curves),function(s) {
+  x<-curves[[s]]
+  data.frame(sample=s,reads_R1=x$R,mean_read_length=x$L,sequencing_effort_bp=x$LR,
+    observed_average_coverage=x$C,Nonpareil_diversity_Nd=if(x$has.model)x$diversity else NA_real_,
+    effort_95pct_bp=if(x$has.model)x$LRstar else NA_real_,model_R=if(x$has.model)x$modelR else NA_real_,
+    consistent=x$consistent,model_fitted=x$has.model,executable_version=x$version,
+    warning=paste(x$warning,collapse="; "))
+})) %>% left_join(meta %>% select(sample,station,basin,season),by="sample")
+write.table(stats,file.path(out,"sample_coverage_summary.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+raw <- bind_rows(lapply(names(curves),function(s) {
+  x<-curves[[s]]
+  data.frame(sample=s,effort_adjusted_bp=x$x.adj,coverage=x$y.cov,coverage_q25=x$y.p25,coverage_q75=x$y.p75)
+}))
+write.table(raw,file.path(out,"rarefied_coverage_points.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+pred <- bind_rows(lapply(names(curves),function(s) {
+  x<-curves[[s]]
+  if(!x$has.model)return(NULL)
+  effort<-exp(seq(log(1e6),log(max(x$LRstar,x$LR)*1.1),length.out=300))
+  data.frame(sample=s,effort_bp=effort,coverage=as.numeric(predict(x,lr=effort)),range=ifelse(effort<=x$LR,"Within input effort","Extrapolation"))
+})) %>% left_join(meta %>% select(sample,station,basin,season),by="sample")
+write.table(pred,file.path(out,"fitted_coverage_curves.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+sens <- list()
+for(v in c("observed_average_coverage","Nonpareil_diversity_Nd","sequencing_effort_bp")) {
+  z<-stats %>% select(station,season,value=all_of(v)) %>% pivot_wider(names_from=season,values_from=value)
+  stopifnot(all(c("spring","autumn")%in%names(z)),nrow(z)==7)
+  delta<-z$spring-z$autumn
+  signs<-as.matrix(expand.grid(rep(list(c(-1,1)),7)))
+  perm<-as.numeric(signs%*%delta/7)
+  sens[[v]]<-data.frame(metric=v,n_pairs=7,spring_minus_autumn_mean=mean(delta),
+    exact_two_sided_P=mean(abs(perm)>=abs(mean(delta))-1e-12),assignments=128)
+}
+write.table(bind_rows(sens),file.path(out,"paired_season_coverage_diagnostics.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+saveRDS(curves,file.path(out,"Nonpareil_curves.rds"))
+capture.output(sessionInfo(),file=file.path(out,"sessionInfo.txt"))
+print(stats);print(bind_rows(sens))
+
+# Data: Nonpareil outputs. Original R plotting code; palette follows the archived
+# Figure 3 project style, which records PlotCase examples. No fresh case retrieval.
+pal<-c(autumn="#7A63A8",spring="#55A47B")
+theme_set(theme_classic(base_size=13)+theme(axis.text=element_text(colour="#25282B"),
+  strip.background=element_blank(),strip.text=element_text(face="bold"),legend.position="bottom"))
+pred$season<-factor(pred$season,levels=c("autumn","spring"))
+stats$season<-factor(stats$season,levels=c("autumn","spring"))
+pred$station<-factor(pred$station,levels=c("N1","N2","N3","N4","S1","S2","S3"))
+stats$station<-factor(stats$station,levels=levels(pred$station))
+p1<-ggplot(pred,aes(effort_bp/1e9,coverage*100,colour=season,group=sample))+
+  geom_hline(yintercept=95,linetype=3,colour="#A9AFB5",linewidth=.35)+
+  geom_line(aes(linetype=range,group=interaction(sample,range)),linewidth=.55)+
+  geom_point(data=stats,aes(x=sequencing_effort_bp/1e9,y=observed_average_coverage*100),size=1.9)+
+  facet_wrap(~station,nrow=2)+scale_x_log10(breaks=c(.001,.1,10),labels=c("0.001","0.1","10"))+
+  scale_y_continuous(limits=c(0,100),breaks=c(0,50,100))+
+  scale_colour_manual(values=pal)+scale_linetype_manual(values=c("Within input effort"="solid","Extrapolation"="dashed"))+
+  labs(x="Sequencing effort from R1 (Gbp)",y="Nonpareil average coverage (%)",colour=NULL,linetype=NULL)
+p2<-ggplot(stats,aes(season,observed_average_coverage*100,group=station))+
+  geom_line(colour="#A9AFB5",linewidth=.45)+geom_point(aes(colour=season,shape=basin),size=2.7)+
+  scale_colour_manual(values=pal)+labs(x=NULL,y="Coverage at input (%)",colour=NULL,shape="Basin")+
+  guides(colour="none",shape=guide_legend(override.aes=list(colour="#25282B")))
+p3<-ggplot(stats,aes(season,Nonpareil_diversity_Nd,group=station))+
+  geom_line(colour="#A9AFB5",linewidth=.45)+geom_point(aes(colour=season,shape=basin),size=2.7)+
+  scale_colour_manual(values=pal)+labs(x=NULL,y="Sequence diversity (Nd)",colour=NULL,shape="Basin")+
+  guides(colour="none",shape=guide_legend(override.aes=list(colour="#25282B")))
+p<-p1/(p2+p3)+plot_layout(heights=c(2,1.15),guides="collect")+plot_annotation(tag_levels="a")
+fig<-file.path(root,"figures");dir.create(fig,showWarnings=FALSE)
+ggsave(file.path(fig,"R1_Nonpareil14.pdf"),p,width=10,height=8.2)
+ggsave(file.path(fig,"R1_Nonpareil14.svg"),p,width=10,height=8.2)
+ggsave(file.path(fig,"R1_Nonpareil14.png"),p,width=10,height=8.2,dpi=300)

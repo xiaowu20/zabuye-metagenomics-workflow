@@ -1,0 +1,7 @@
+# Python >= 3.11. Biopython's residue percentages and pI calculation are versioned.
+biopython==1.87
+matplotlib>=3.9,<4
+numpy>=1.26,<3
+openpyxl>=3.1,<4
+pandas>=2.2,<4
+scipy>=1.12,<2

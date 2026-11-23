@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH --job-name=FM_R1_GTDB251
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=96G
+#SBATCH --time=02:00:00
+#SBATCH --output=@REVISION@/logs/gtdb251_%j.out
+#SBATCH --error=@REVISION@/logs/gtdb251_%j.err
+set -euo pipefail
+BASE=@PROJECT@
+ROOT="$BASE/Major_revised_FM/R1_20261110"
+export PATH=@CONDA@/envs/gtdbtk_v25/bin:$PATH
+export GTDBTK_DATA_PATH="$BASE/db/gtdbtk_r226"
+gtdbtk identify --genome_dir "$ROOT/phylogeny/genomes84" -x fa --out_dir "$ROOT/phylogeny/gtdb84_v251" --cpus 32 --write_single_copy_genes --debug
+gtdbtk align --identify_dir "$ROOT/phylogeny/gtdb84_v251" --out_dir "$ROOT/phylogeny/gtdb84_v251" --skip_gtdb_refs --cpus 32 --debug
