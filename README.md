@@ -56,16 +56,16 @@ P=../zabuye-fresh
 W=../compute
 python workflow/stage.py --mode fresh --project "$P" --conda "$(conda info --base)" \
   --s5 "$BOOKS/Supplementary_Data_S5.zip"
-python workflow/run.py reads --samples ../samples.tsv --project "$P" --work "$W" --threads 16
+python workflow/run.py reads --samples ../samples.tsv --project "$P" --work "$W" --threads 8
 ```
 
-Run the printed plan within a Linux compute allocation. The `reads` branch downloads paired reads, runs fastp and links its products for profiling and the new 14-library assemblies. The historical four coassemblies used a separate archived set of provider-cleaned FASTQs. Their identity with newly fastp-processed SRA reads has not been established. Rebuilding the historical catalogue requires those archived inputs. The frozen S5 replay uses the original catalogue-specific mapping and response tables directly.
+Run the printed plan within a Linux compute allocation. The `reads` branch downloads paired reads, runs fastp and links its products for profiling and the new 14-library assemblies. The four historical coassemblies used the archived FASTQs recorded under `00_qc_raw`. Their read counts differ from both the supplier's clean-read counts and the later fastp output. The exact upstream filtering history of those assembly FASTQs is unresolved. Rebuilding the historical catalogue requires those archived inputs. The frozen S5 replay uses the original catalogue-specific mapping and response tables directly.
 
 | Scientific task | Entry point | Main products |
 | --- | --- | --- |
 | Paired read processing and taxonomic profiling | `run.py reads`, `taxonomy` | fastp reads, two-pass Kraken2/Bracken counts, paired taxonomic models |
 | Community gene profiling | `run.py community-ko` | HUMAnN tables, KEGG orthologue abundance and primary-control fits |
-| Historical MAG recovery | `run.py historical --provider DIR` | Four coassemblies, refined bins, quality scores, dRep representatives and r226 taxonomy |
+| Historical MAG recovery | `run.py historical --assembly-reads DIR` | Four coassemblies, refined bins, quality scores, dRep representatives and r226 taxonomy |
 | Genome-linked traits | `run.py primary-traits`, `reference_steps.py`, `markers.py` | Competitive recruitment, graded module potential, strict carrier abundance, detected-carrier prevalence, pI and marker summaries |
 | Identical-input assembly, binning and coverage comparisons | `run.py sensitivity` | 29 assembly tasks, three-binner runs, strategy-specific catalogues, matched groups and Nonpareil diagnostics |
 | Organismal phylogeny | `run.py trees`, `run.py replay` | Protein and codon trees, Pagel’s λ and within-lineage PGLS |

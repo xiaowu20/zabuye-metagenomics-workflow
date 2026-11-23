@@ -15,6 +15,6 @@ python workflow/figures.py --group paper --books ../books --project ../replay --
 
 这条路线可重绘 5 张主图中的 4 张，以及 28 张补图中的 27 张。Figure 4 和 Figure S9 还需要全体与高质量 Zabuye 水体 MAG 的等权蛋白 pI 密度曲线。可直接使用本地归档的曲线，也可用公开的 `workflow/protein_density.R` 从逐蛋白 pI 和 S4 重建，再执行 `--group all` 生成全部 33 个图号。只核对 S20、S21 等修回新增图时，可单独运行对应组。Figure 3C 保留全部 12 列。[逐图输入与密度重算命令](figures.md)
 
-**从原始测序重跑。** 从 BioProject 导出 RunInfo，使用其中的 `LibraryName` 与 `Run`，再由 `manifest.py` 对照 S5 的 MEGAHIT 输入顺序生成 35 个文库的清单。计算流程包含 reads 质控、分类和群落 KO、组装分箱、MAG 质控和注释、覆盖度、配对模型、系统树及绘图。首次运行 `run.py` 默认只列命令，加入 `--execute` 才执行。原始四组共组装使用独立保存的预清洗 FASTQ，当前缺少证据证明其与公开 reads 经 fastp 得到的文件完全相同。对应的历史分析、同输入 14 文库敏感性和冻结结果复算，在运行指南中给出了各自的输入。[NCBI BioProject](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1531265) · [Linux 与超算运行指南](compute.md)
+**从原始测序重跑。** 从 BioProject 导出 RunInfo，使用其中的 `LibraryName` 与 `Run`，再由 `manifest.py` 对照 S5 的 MEGAHIT 输入顺序生成 35 个文库的清单。计算流程包含 reads 质控、分类和群落 KO、组装分箱、MAG 质控和注释、覆盖度、配对模型、系统树及绘图。首次运行 `run.py` 默认只列命令，加入 `--execute` 才执行。原始四组共组装使用归档在 `00_qc_raw` 的 FASTQ。逐库读数与服务商的 clean 统计、后续 fastp 输出均有差异，生成这批组装输入的确切过滤步骤仍待核实。历史组装、同输入 14 文库敏感性分析和从 S5 冻结文件复算的输入分别见运行指南。[NCBI BioProject](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1531265) · [Linux 与超算运行指南](compute.md)
 
 **比较结果时保留分析单位。** 日期比较限于 2023 年 4 月与 10 月的七个配对站点。SCA、GMP 和检出携带者比例使用不同分母。MAG 功能分解描述加性归属，蛋白 pI 是序列性状。外部沉积物数据的环境模型以湖为单位。手工制图部分可通过 `artwork.py` 从自有 Word 稿件导出终稿图像，与代码重绘结果对照。

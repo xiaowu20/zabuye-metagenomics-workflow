@@ -23,13 +23,15 @@ def main():
     p.add_argument("--project", type=Path, required=True)
     p.add_argument("--samples", type=Path)
     p.add_argument("--work", type=Path)
-    for name in ("provider", "books", "local-inputs", "out"):
+    for name in ("books", "local-inputs", "out"):
         p.add_argument("--"+name, type=Path)
+    p.add_argument("--assembly-reads", "--provider", type=Path, help="Archived 00_qc_raw FASTQ directory")
+    p.add_argument("--assembly-threads", type=int, help="Override --threads for the four historical MEGAHIT jobs")
     p.add_argument("--threads", type=int, default=32)
     p.add_argument("--rscript", default="Rscript")
     p.add_argument("--execute", action="store_true", help="Default prints commands without launching any compute")
     a = p.parse_args()
-    if a.threads < 1:
+    if a.threads < 1 or (a.assembly_threads is not None and a.assembly_threads < 1):
         p.error("Choose a positive thread count")
     base = a.project.resolve()
     if a.branch not in ("replay","study-models","figures"):
@@ -70,9 +72,10 @@ def main():
         cmd(sys.executable,REPO/"workflow"/name,*args)
     def primary(stage,units):
         for unit in units:
-            args=[stage,unit,*common,"--threads",a.threads]
+            threads = (a.assembly_threads or a.threads) if stage == "coassemble" else a.threads
+            args=[stage,unit,*common,"--threads",threads]
             if stage=="coassemble":
-                args.extend(["--provider",a.provider.resolve()])
+                args.extend(["--assembly-reads",a.assembly_reads.resolve()])
             python("primary.py",*args)
     def join(stage):
         python("joins.py",stage,*common,"--project",base)
@@ -98,7 +101,7 @@ def main():
         if a.local_inputs and a.out:
             r(REPO/"workflow/community_ko.R",a.local_inputs/"community_ko",a.out/"community_ko",work/"community_ko/KO_cpm.tsv")
     elif a.branch=="historical":
-        if not a.provider:p.error("Historical assemblies require --provider with the four-group archived input FASTQs")
+        if not a.assembly_reads:p.error("Historical assemblies require --assembly-reads with the archived input FASTQs")
         primary("coassemble",GROUPS)
         primary("bin",GROUPS)
         for step in ("quality","dereplicate","gtdb"):

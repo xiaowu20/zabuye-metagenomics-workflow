@@ -100,8 +100,8 @@ def run_step(a, rows, out):
     elif stage=="coassemble":
         ordered=sorted((r for r in rows if r["group"]==key),key=lambda r:int(r["assembly_order"]))
         if not ordered: raise ValueError(f"No libraries for {key}")
-        if a.provider is None: raise ValueError("--provider is required for the historical assemblies.")
-        pairs=[[a.provider/f"{r['sample_id']}.R{m}.clean.fastq.gz" for m in (1,2)] for r in ordered]
+        if a.assembly_reads is None: raise ValueError("--assembly-reads is required for the historical assemblies.")
+        pairs=[[a.assembly_reads/f"{r['sample_id']}.R{m}.clean.fastq.gz" for m in (1,2)] for r in ordered]
         require(p for pair in pairs for p in pair)
         run("megahit","-1",",".join(str(x[0]) for x in pairs),"-2",",".join(str(x[1]) for x in pairs),
             "--k-list","21,29,39,59,79,99,119,141","--min-count","2","--min-contig-len","500",
@@ -212,7 +212,7 @@ def main():
     p.add_argument("unit",help="Library ID, assembly group, or 'project' for a joint operation")
     p.add_argument("--work",type=Path,required=True)
     p.add_argument("--samples",type=Path,required=True)
-    p.add_argument("--provider",type=Path,help="Archived assembly-input FASTQs")
+    p.add_argument("--assembly-reads","--provider",type=Path,help="Archived 00_qc_raw assembly-input FASTQs")
     p.add_argument("--threads",type=int,default=8)
     a=p.parse_args();a.work=a.work.resolve()
     rows=read_samples(a.samples)
