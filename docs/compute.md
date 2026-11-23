@@ -6,7 +6,7 @@ Use Linux for the sequencing steps. Model replay and table-based figure renderin
 
 | Step | Study software or reference |
 | --- | --- |
-| Retrieval and QC | NCBI SRA Toolkit (`prefetch`, `fasterq-dump`), fastp 1.3.2 |
+| Retrieval and QC | NCBI SRA Toolkit (`prefetch`, `fasterq-dump`), fastp 0.22.0 for the four historical coassemblies and fastp 1.3.2 for subsequent read processing |
 | Assembly and binning | MEGAHIT 1.2.9, metaSPAdes 4.0.0, Bowtie2, SAMtools, MetaBAT2 2.18, MaxBin2 2.2.7, CONCOCT and its auxiliary scripts, DAS Tool 1.1.7 |
 | Genome quality and redundancy | CheckM2 1.1.0 with the matching DIAMOND database, dRep 3.6.2, fastANI |
 | Read and genome annotation | Kraken2 2.1.3, Bracken 3.0.1, PlusPF `k2_pluspf_20240605`, Prodigal, eggNOG-mapper 2.1.12 with data 5.0.2 and DIAMOND 2.1.24 |
@@ -49,17 +49,31 @@ Fresh revision scripts also look for `$P/db/checkm2/CheckM2_database/uniref100.K
 
 Define `P`, `W`, `BOOKS` and the manifest as in the README. Use a new fresh-mode project and a separate work root, with sufficient storage for FASTQs, indexes, BAMs and assemblies. For native shell templates, choose Linux project and Conda paths without spaces. Filesystem symlinks, hard links within the work volume and node-local temporary storage are used. `run.py` executes one command at a time inside the allocation. Calling the underlying array templates through your site's scheduler is also possible. Some native templates request or use 32 threads explicitly. The historical jobs' resource requests are visible in their template headers.
 
+Install the two fastp versions separately, or use equivalent site installations. `reads` uses the fastp on `PATH`. `--historical-fastp` selects the executable for the four original assemblies. Both steps check the executable version.
+
+```bash
+QC_ENVS="$(pwd)/../qc-envs"
+conda create --prefix "$QC_ENVS/fastp-0.22.0" --strict-channel-priority -c conda-forge -c bioconda fastp=0.22.0
+conda create --prefix "$QC_ENVS/fastp-1.3.2" --strict-channel-priority -c conda-forge -c bioconda fastp=1.3.2
+FASTP_0220="$QC_ENVS/fastp-0.22.0/bin/fastp"
+export PATH="$QC_ENVS/fastp-1.3.2/bin:$PATH"
+```
+
 ```bash
 common=(--samples ../samples.tsv --project "$P" --work "$W")
 python workflow/run.py reads "${common[@]}" --threads 8 --execute
-python workflow/run.py historical "${common[@]}" --assembly-reads "$ASSEMBLY_READS" --assembly-threads 48 --threads 32 --execute
+python workflow/run.py historical "${common[@]}" --historical-fastp "$FASTP_0220" --assembly-threads 48 --threads 32 --execute
 python workflow/run.py primary-traits "${common[@]}" --execute
 python workflow/run.py sensitivity "${common[@]}" --execute
 python workflow/run.py trees "${common[@]}" --execute
 ```
 
-1. **Read processing.** The SRA exporter validates the physical-library manifest against S5. fastp uses paired-end adapter detection, Q20 and a 50-bp minimum. Competition for recruitment is defined by the reference genomes supplied to each individual CoverM run.
-2. **Four historical grouped assemblies.** The original MEGAHIT options identify the `00_qc_raw` files and mate order and specify 48 threads. Set `ASSEMBLY_READS` to the directory containing these files, named `<sample_id>.R1.clean.fastq.gz` and `<sample_id>.R2.clean.fastq.gz`. Library-level counts in the assembly logs differ from the supplier clean-read summaries and the later fastp output. The program and settings that created the historical assembly FASTQs remain undocumented. For binning, the historical depth profiles used the later fastp reads and MetaBAT2 used 32 threads. The historical MaxBin2 input uses `-abund` with total mean depth. The new independent/pooled-14 assemblies use per-library `-abund_list`. DAS Tool uses a 0.5 score threshold.
+The historical command above starts from the raw pairs in `$W/fetch`. If the original raw archive is available, add `--historical-raw DIR` with files named `<sample_id>.R1.raw.fastq.gz` and `<sample_id>.R2.raw.fastq.gz`. Alternatively, replace `--historical-fastp "$FASTP_0220"` with `--assembly-reads DIR` to use archived `00_qc_raw` files named `<sample_id>.R1.clean.fastq.gz` and `<sample_id>.R2.clean.fastq.gz` directly. The `--provider` spelling remains a legacy alias for this directory. Run `reads` before either route to supply the later depth-mapping reads. Use a separate work directory when comparing different sources.
+
+`manifest.py` takes `historical_input_reads` from each original MEGAHIT log in S5. This is the number of individual reads across both mates. For reconstructed pairs the workflow compares this value to `summary.after_filtering.total_reads` in the fastp JSON and stops before coassembly on a mismatch. Regenerate a v1.0.0 five-column manifest with the README command to enable this check. The original-archive replay matched all 35 counts. The FASTQs exported from SRA were outside that validation, and no historical FASTQ digest was available for comparison.
+
+1. **Read processing.** Each SRA run supplies a pair in `$W/fetch/<sample_id>/`. The `reads` branch runs fastp 1.3.2 with paired-end adapter detection, a Phred threshold of 20 for qualified bases and a minimum read length of 50 bp. These reads, filtered without `--correction`, go to `$W/trim/` for profiling, recruitment, binning depth and the new 14-library assemblies.
+2. **Four historical grouped assemblies.** The `historical-trim` step separately runs fastp 0.22.0 with `--detect_adapter_for_pe --qualified_quality_phred 20 --length_required 50 --correction`. The original run used eight threads. The wrapper uses eight when allocated at least that many. Filtered pairs and reports go to `$W/historical-trim/<sample_id>/`. MEGAHIT receives the pairs in the order recorded in S5 and used 48 threads in the original assemblies. MetaBAT2 used 32 threads. Historical MaxBin2 input uses `-abund` with total mean depth. The new independent/pooled-14 assemblies use per-library `-abund_list`. DAS Tool uses a 0.5 score threshold.
 3. **MAG-linked response matrices.** Following quality assessment and dereplication, the primary branch calls proteins, assigns orthologues, applies the corrected empty-member scoring rules and recruits paired reads competitively. At mean depth ≥1 and breadth ≥0.50, abundance-weighted GMP uses graded module scores, SCA weights strict carriers by abundance, and detected-carrier prevalence gives each detected genome equal weight. Alternatives at breadth 0.10 and 0.25 are in the S5 catalogue branch. Protein pI is calculated after removing nonstandard residues and excluding sequences shorter than 20 residues. Historical acidic/basic “fraction” columns store percentages.
 4. **Sensitivity.** The 29 tasks are 14 independent MEGAHIT, 14 independent metaSPAdes and one pooled-14 MEGAHIT job on the same fastp libraries. The sensitivity branch also re-bins original contigs, compares reciprocal ANI and aligned fractions, and includes both the historical all-reference recruitment and the restricted remap of the same 269 genomes. It requires the historical contigs, original bins/BAMs and analytical FASTAs at the paths created by `joins.py reference`. An assembly reconstructed with different representatives cannot be silently substituted for the archived 269. A stand-alone task can be run from its printed command with a valid node allocation.
 5. **Trees and marker checks.** The original 143-tip r220 archaeal alignment came from an earlier collection. The archived tree in S5 supplies the pruned within-lineage baseline for replay. To rerun its inference from the original masked alignment, use the command below. The fresh 84-genome workflow compares the masked protein tree, a matched amino-acid tree and a codon-partitioned nucleotide tree to that baseline. `markers.py` handles the distinct potassium-marker gene tree. The study selected LG+F+G4 for the 84-tip masked tree and LG+F+R7 for the 187-tip marker tree. Protein sequence pI and the quality-adjusted PGLS refer to different response scales from gene activity or ion flux.

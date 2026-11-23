@@ -3,10 +3,24 @@ import argparse
 import csv
 import io
 import json
+import re
 import tempfile
 from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
 from primary import GROUPS, read_samples
+
+
+def assembly_libraries(group, options, log):
+    entries = re.findall(r"\bLib (\d+) \(([^,\n]+),([^\n)]+)\): pe, (\d+) reads,", log)
+    mates = zip(options["pe1"], options["pe2"], strict=True)
+    for index, ((r1, r2), entry) in enumerate(zip(mates, entries, strict=True)):
+        number, logged_r1, logged_r2, reads = entry
+        if (int(number), logged_r1, logged_r2) != (index, r1, r2):
+            raise ValueError(f"MEGAHIT log and options disagree in {group} at library {index}")
+        sample, suffix = PurePosixPath(r1).name.split(".R1.", 1)
+        if PurePosixPath(r2).name != f"{sample}.R2.{suffix}":
+            raise ValueError(f"Mate mismatch in {group} at library {index}")
+        yield sample, index + 1, int(reads)
 
 
 def main():
@@ -31,21 +45,19 @@ def main():
         paired = source.read("Supplementary_Data_S5/inputs/paired14.tsv").decode("utf-8-sig")
         ids = {row["sample"] for row in csv.DictReader(io.StringIO(paired), delimiter="\t")}
         for group in GROUPS:
-            path = f"Supplementary_Data_S5/provenance/original_commands/05_assembly/{group}/options.json"
-            options = json.loads(source.read(path))
-            for position, (r1, r2) in enumerate(zip(options["pe1"], options["pe2"], strict=True), 1):
-                sample, suffix = PurePosixPath(r1).name.split(".R1.", 1)
-                if PurePosixPath(r2).name != f"{sample}.R2.{suffix}":
-                    raise ValueError(f"Mate mismatch in {group} at position {position}")
-                rows.append([sample, runs[sample], group, position, int(sample in ids)])
-    if set(r[0] for r in rows) != set(runs) or len(rows) != 35 or sum(r[-1] for r in rows) != 14:
+            folder = f"Supplementary_Data_S5/provenance/original_commands/05_assembly/{group}"
+            options = json.loads(source.read(f"{folder}/options.json"))
+            log = source.read(f"{folder}/{group}.log").decode()
+            for sample, position, count in assembly_libraries(group, options, log):
+                rows.append([sample, runs[sample], group, position, int(sample in ids), count])
+    if set(r[0] for r in rows) != set(runs) or len(rows) != 35 or sum(r[4] for r in rows) != 14:
         raise ValueError("Sample IDs do not reconcile with the study design")
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=a.out.parent) as temp:
         candidate=Path(temp)/"samples.tsv"
         with candidate.open("w",encoding="utf-8",newline="") as f:
             writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            writer.writerow(["sample_id", "run", "group", "assembly_order", "paired"])
+            writer.writerow(["sample_id", "run", "group", "assembly_order", "paired", "historical_input_reads"])
             writer.writerows(rows)
         read_samples(candidate)
         with a.out.open("xb") as f:

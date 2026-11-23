@@ -9,7 +9,7 @@ The repository contains study code, software specifications and run instructions
 For the revision analyses alone, start with `Supplementary_Data_S5.zip`. Add S6 for the contamination-screening sensitivity figures. The main figures also use workbooks S1–S4 and the Figure 3 addendum. Download the authors’ supplements in their original formats. Staging checks the SHA-256 digest of each supplied S5/S6 ZIP and creates a new workspace.
 
 ```bash
-git clone --branch v1.0.0 https://github.com/xiaowu20/zabuye-metagenomics-workflow.git
+git clone --branch v1.1.0 https://github.com/xiaowu20/zabuye-metagenomics-workflow.git
 cd zabuye-metagenomics-workflow
 conda env create -f env/replay.yml
 conda activate zabuye-replay
@@ -46,7 +46,7 @@ python workflow/run.py replay --project "$P" --books "$BOOKS" --out ../model-fit
 
 ## Start from the sequencing runs
 
-The NCBI RunInfo metadata provide the physical library names and SRA accessions. The manifest builder cross-checks library identity, mate filenames and input order against the four original MEGAHIT option files in S5. It also verifies the paired subset. [NCBI BioProject PRJNA1531265](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1531265)
+The NCBI RunInfo metadata provide the physical library names and SRA accessions. The manifest builder checks mate filenames and input order against the four MEGAHIT option files in S5, reads the historical input count for each library from the corresponding assembly log, and verifies the paired subset. [NCBI BioProject PRJNA1531265](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1531265)
 
 ```bash
 curl -fL 'https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/runinfo?acc=PRJNA1531265' -o ../RunInfo.csv
@@ -59,13 +59,23 @@ python workflow/stage.py --mode fresh --project "$P" --conda "$(conda info --bas
 python workflow/run.py reads --samples ../samples.tsv --project "$P" --work "$W" --threads 8
 ```
 
-Run the printed plan within a Linux compute allocation. The `reads` branch downloads paired reads, runs fastp and links its products for profiling and the new 14-library assemblies. The four historical coassemblies used the archived FASTQs recorded under `00_qc_raw`. Their read counts differ from both the supplier's clean-read counts and the later fastp output. The exact upstream filtering history of those assembly FASTQs is unresolved. Rebuilding the historical catalogue requires those archived inputs. The frozen S5 replay uses the original catalogue-specific mapping and response tables directly.
+The `reads` branch uses fastp 1.3.2 without overlap correction for profiling, binning depth and the new 14-library assemblies. The four historical coassemblies used fastp 0.22.0 with paired-end adapter detection, a Phred threshold of 20 for qualified bases, a minimum read length of 50 bp and overlap correction. The authors’ 9 April log for D1 records the output filenames later read by MEGAHIT. Reprocessing the 35 author-archived raw libraries with these settings reproduced the input read count for every library in the four MEGAHIT logs. Historical FASTQ checksums were unavailable. This comparison used the authors’ raw files and assessed read counts through filtering.
+
+After running `reads`, choose one of the following historical assembly inputs. The default uses the raw pairs in `work/fetch`. To use the authors’ raw pairs instead, add `--historical-raw DIR`. With a newly generated manifest, the workflow checks each reconstructed library against S5 before assembly. These commands print the plan. Add `--execute` in a Linux compute allocation. [Software setup and input filenames](docs/compute.md#executing-the-raw-data-branches)
+
+```bash
+python workflow/run.py historical --samples ../samples.tsv --project "$P" --work "$W" \
+  --historical-fastp "$FASTP_0220" --assembly-threads 48
+# Alternative for users with the archived clean pairs in 00_qc_raw
+python workflow/run.py historical --samples ../samples.tsv --project "$P" --work "$W" \
+  --assembly-reads "$ASSEMBLY_READS" --assembly-threads 48
+```
 
 | Scientific task | Entry point | Main products |
 | --- | --- | --- |
 | Paired read processing and taxonomic profiling | `run.py reads`, `taxonomy` | fastp reads, two-pass Kraken2/Bracken counts, paired taxonomic models |
 | Community gene profiling | `run.py community-ko` | HUMAnN tables, KEGG orthologue abundance and primary-control fits |
-| Historical MAG recovery | `run.py historical --assembly-reads DIR` | Four coassemblies, refined bins, quality scores, dRep representatives and r226 taxonomy |
+| Historical MAG recovery | `run.py historical` | Version-checked read filtering or archived clean pairs, four coassemblies, refined bins, quality scores, dRep representatives and r226 taxonomy |
 | Genome-linked traits | `run.py primary-traits`, `reference_steps.py`, `markers.py` | Competitive recruitment, graded module potential, strict carrier abundance, detected-carrier prevalence, pI and marker summaries |
 | Identical-input assembly, binning and coverage comparisons | `run.py sensitivity` | 29 assembly tasks, three-binner runs, strategy-specific catalogues, matched groups and Nonpareil diagnostics |
 | Organismal phylogeny | `run.py trees`, `run.py replay` | Protein and codon trees, Pagel’s λ and within-lineage PGLS |
@@ -75,4 +85,4 @@ Run the printed plan within a Linux compute allocation. The `reads` branch downl
 
 The figure runner has a separate source-table entry point. An optional Figure 1a script also draws the two lakes, relief and sampling stations from the archived map layers and S1. Field chemistry, optical measurements, historical reference files and author artwork have their own provenance. The release checks exercised downstream fits and redraws with study inputs. The computationally intensive route from all 35 raw libraries was not rerun end to end for this code release.
 
-See the [Linux and HPC run guide](docs/compute.md) for dependencies, inputs and handoffs, and the [figure index](docs/figures.md) for the route to each numbered panel. Cite [release v1.0.0](https://github.com/xiaowu20/zabuye-metagenomics-workflow/releases/tag/v1.0.0) when using this version.
+For the commands and inputs for each panel, see the [Linux and HPC run guide](docs/compute.md) and [figure index](docs/figures.md). The release page provides the citation for this version. [Release v1.1.0](https://github.com/xiaowu20/zabuye-metagenomics-workflow/releases/tag/v1.1.0) · [Zenodo archive for all versions](https://doi.org/10.5281/zenodo.24455127)

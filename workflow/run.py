@@ -25,7 +25,10 @@ def main():
     p.add_argument("--work", type=Path)
     for name in ("books", "local-inputs", "out"):
         p.add_argument("--"+name, type=Path)
-    p.add_argument("--assembly-reads", "--provider", type=Path, help="Archived 00_qc_raw FASTQ directory")
+    source = p.add_mutually_exclusive_group()
+    source.add_argument("--assembly-reads", "--provider", type=Path, help="Use archived 00_qc_raw clean FASTQs and skip historical filtering")
+    source.add_argument("--historical-raw", type=Path, help="Original raw <sample>.R[12].raw.fastq.gz for historical filtering (default: work/fetch)")
+    p.add_argument("--historical-fastp", default="fastp", metavar="PROGRAM", help="fastp 0.22.0 executable for historical filtering")
     p.add_argument("--assembly-threads", type=int, help="Override --threads for the four historical MEGAHIT jobs")
     p.add_argument("--threads", type=int, default=32)
     p.add_argument("--rscript", default="Rscript")
@@ -73,8 +76,14 @@ def main():
     def primary(stage,units):
         for unit in units:
             threads = (a.assembly_threads or a.threads) if stage == "coassemble" else a.threads
+            if stage == "historical-trim":
+                threads = min(8, threads)
             args=[stage,unit,*common,"--threads",threads]
-            if stage=="coassemble":
+            if stage == "historical-trim":
+                args.extend(["--historical-fastp", a.historical_fastp])
+                if a.historical_raw is not None:
+                    args.extend(["--historical-raw", a.historical_raw.resolve()])
+            if stage == "coassemble" and a.assembly_reads is not None:
                 args.extend(["--assembly-reads",a.assembly_reads.resolve()])
             python("primary.py",*args)
     def join(stage):
@@ -101,7 +110,8 @@ def main():
         if a.local_inputs and a.out:
             r(REPO/"workflow/community_ko.R",a.local_inputs/"community_ko",a.out/"community_ko",work/"community_ko/KO_cpm.tsv")
     elif a.branch=="historical":
-        if not a.assembly_reads:p.error("Historical assemblies require --assembly-reads with the archived input FASTQs")
+        if a.assembly_reads is None:
+            primary("historical-trim", library_ids)
         primary("coassemble",GROUPS)
         primary("bin",GROUPS)
         for step in ("quality","dereplicate","gtdb"):
