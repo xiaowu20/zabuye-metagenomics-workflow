@@ -25,7 +25,9 @@ python workflow/figures.py --books "$BOOKS" --local-inputs ../from-supplements \
   --project "$P" --group paper --out ../figures-from-paper
 ```
 
-With S1–S6 and the S3 addendum this route draws 31 figure numbers and writes a PDF, SVG and PNG for each. Figure 4 and Figure S9 use two additional equal-MAG-weight protein-density tables. Readers with those tables can render all 33. For a quick S5-only example, the command below draws the 14-library Nonpareil diagnostic from its archived curve tables. The group runner accepts paths for the books and plotting inputs even when a selected group reads only S5.
+With S1–S6 and the S3 addendum this route draws 31 figure numbers and writes a PDF, SVG and PNG for each. Figure 4 and Figure S9 use two additional equal-MAG-weight pI density grids. Supply the author-held grids or regenerate them from protein-level pI and S4 with `workflow/protein_density.R` to draw all 33. The [figure index](docs/figures.md) gives the exact command.
+
+For a quick S5-only example, the command below draws the 14-library Nonpareil diagnostic from its archived curve tables. The group runner accepts paths for the books and plotting inputs even when a selected group reads only S5.
 
 ```bash
 python workflow/stage.py --s5 "$BOOKS/Supplementary_Data_S5.zip" --project ../s5-only
@@ -33,9 +35,12 @@ python workflow/figures.py --group coverage --project ../s5-only --books "$BOOKS
   --local-inputs ../from-supplements --out ../coverage-figure
 ```
 
-The frozen-model replay refits the seven catalogue specifications, sequencing-coverage sensitivity, phylogenetic models and external lake models. It writes analysis outputs inside the **newly staged workspace** and writes the external fits under `--out`. The default prints the command plan. Add `--execute` to perform the calculations.
+The S5 replay refits the seven catalogue specifications, sequencing-coverage sensitivity and phylogenetic models inside the **newly staged workspace**. Figures S22 and S23 read the catalogue-specific fit tables directly. To include the external lake models, supply the S4 workbook directory and an output directory. Each command below defines a complete run. The default prints the command plan. Add `--execute` to perform the calculations.
 
 ```bash
+# S5 alone
+python workflow/run.py replay --project ../s5-only --execute
+# S5 and the external S4 fits
 python workflow/run.py replay --project "$P" --books "$BOOKS" --out ../model-fits --execute
 ```
 

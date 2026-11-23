@@ -11,9 +11,25 @@ WORKFLOW = Path(__file__).resolve().parents[1] / "workflow"
 sys.path.insert(0, str(WORKFLOW))
 from module_rules import calculate, scores
 from primary import read_samples
+from stage import SUBDIR
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_s5_replay_plan_needs_no_other_workbook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            root = project / SUBDIR
+            root.mkdir(parents=True)
+            (root / "workspace.json").write_text('{"mode":"replay"}')
+            command = [sys.executable, str(WORKFLOW / "run.py"), "replay", "--project", tmp]
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            self.assertIn("Planned 17 operations.", result.stderr)
+            self.assertNotIn("external_models.R", result.stdout)
+            request_external = subprocess.run(command + ["--books", tmp, "--out", str(project / "fits")],
+                                              capture_output=True, text=True)
+            self.assertNotEqual(request_external.returncode, 0)
+            self.assertIn("Supplementary_Data_S4.xlsx", request_external.stderr)
+
     def test_single_gene_with_empty_required_members(self):
         members = pd.DataFrame({"gene": ["example"], "KO": ["test_ko"]})
         definitions = pd.DataFrame([dict(module_id="choice", scoring_function="single_gene_or",

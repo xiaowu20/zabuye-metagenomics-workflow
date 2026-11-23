@@ -7,7 +7,7 @@
 | 1, 5, S1–S5, S11, S14, S16 | `workbooks` | S1, S3 and S4 workbook sheets read by `plots/workbook_panels.py`. Figure 1 redraws station coordinates and study design. Figure 5 refits the line through the ten lake means. |
 | 2 | `community` | Seven source tables derived from S1 and S2 by `paper_inputs.py`. Includes the paired model, the 21-library composition display and the occurrence tables. |
 | 3 | `carriers` | Five final panel tables from S5. Also regenerable with `carrier_attribution.py` and `figure3_tables.py` using the local source matrices. Panel C includes all 12 displayed module columns. |
-| 4, S9 | `traits` | S4, the midpoint tree in S5 and two local density grids. Figure 4 draws the tree, trait summaries and coefficient panels. Its submitted layout includes manual Illustrator work. |
+| 4, S9 | `traits` | S4, the midpoint tree in S5 and equal-MAG-weight pI grids. Supply archived grids or generate them from per-protein pI with `workflow/protein_density.R`. The submitted Figure 4 includes manual Illustrator work. |
 | S6, S7, S10, S12, S13, S15, S19 | `traits` (also included in `paper`) | S4 traits, marker tests, lake/DOM diagnostics and the S3 Figure 3 addendum for ion and carrier tables. |
 | S8, S17, S18 | `display` | S5 `inputs/si_display_sources`, including the independently archived S8 density table. |
 | S20 | `coverage` | S5 Nonpareil sample estimates, observed points and fitted curves. |
@@ -35,9 +35,13 @@ from-supplements/
 ```
 
 ```bash
+Rscript --vanilla workflow/protein_density.R "$W/traits/protein_pI.tsv" \
+  ../books/Supplementary_Data_S4.xlsx ../from-supplements/extra
 python workflow/figures.py --group all --books ../books --project ../zabuye-replay \
   --local-inputs ../from-supplements --out ../all-figures
 ```
+
+The R command builds the grids from the `mag_id` and `pI` columns of the primary-traits output. It also accepts the two-column gzipped checkpoint. Use S4 for the archived MAG identities or the corresponding catalogue TSV for fresh identities. Each Zabuye water MAG has its own density on a common 512-point grid with one bandwidth estimated from all included proteins. The interval resamples MAGs 1,999 times within each group. The same bandwidth and the archived pre-R-4.4 FFT grid convention apply to the full, HQ and protein-pooled curves. The third output, `pooled_protein_density.tsv`, can be compared with the S8 source in S5.
 
 For a visual comparison against the submitted artwork, supply the clean, author-held Word files to the separate exporter. It matches each figure caption to its embedded image, checks all expected figure numbers and records image digests. This operation exports existing artwork and performs no analysis.
 

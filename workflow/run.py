@@ -153,14 +153,18 @@ def main():
         r(code/"replay_phylogenetic_models.R",root)
         r(code/"compare_phylogenies.R",root)
     elif a.branch=="replay":
-        if not a.books or not a.out:p.error("Supply --books and --out for the external-lake model")
+        if bool(a.books) != bool(a.out):
+            p.error("Supply both --books and --out to add the S4 external-lake model, or omit both for S5 alone")
+        if a.books and not (a.books/"Supplementary_Data_S4.xlsx").is_file():
+            p.error("The requested external-lake model needs Supplementary_Data_S4.xlsx in --books")
         r(code/"replay_phylogenetic_models.R",root)
         r(code/"compare_phylogenies.R",root)
         for group in (ARCHIVE,REMAP,*NEW):
             r(code/"catalogue_statistics.R",root,group)
             r(code/"coverage_sensitivity.R",root,group)
         r(code/"coverage_sensitivity.R",root,"read_species")
-        r(REPO/"workflow/external_models.R",a.books/"Supplementary_Data_S4.xlsx",a.out/"external")
+        if a.books:
+            r(REPO/"workflow/external_models.R",a.books/"Supplementary_Data_S4.xlsx",a.out/"external")
     elif a.branch=="study-models":
         if not a.books or not a.local_inputs or not a.out:p.error("Supply --books, --local-inputs and a new --out")
         src=a.local_inputs

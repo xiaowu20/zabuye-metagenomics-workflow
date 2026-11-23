@@ -4,6 +4,11 @@ ids<-c("archival_original269","remapped_original269","original_ZBY_water_das2_ma
 labs<-c("Original 269 / 414 refs","Original 269 / 269 refs","Archived 21 / 2 binners","Archived 21 / 3 binners","Pooled 14 / MEGAHIT","Single 14 / MEGAHIT","Single 14 / metaSPAdes")
 label_catalogue<-function(x)factor(x,levels=rev(ids),labels=rev(labs))
 read<-function(name)read.delim(file.path(src,paste0(name,".tsv")),check.names=FALSE)
+read_catalogue_fits <- function(filename) {
+  bind_rows(lapply(ids, function(id) {
+    read.delim(file.path(root, "catalogues", id, "statistics", filename), check.names = FALSE)
+  }))
+}
 theme_set(theme_classic(base_size=17)+theme(axis.text=element_text(colour="#25282B"),
   strip.background=element_blank(),strip.text=element_text(face="bold"),legend.position="bottom"))
 
@@ -37,7 +42,7 @@ p<-p & theme(text=element_text(size=20),axis.title=element_text(size=18),
   legend.title=element_text(size=17),plot.margin=margin(12,16,12,12))
 for(ext in c("pdf","svg","png"))ggsave(file.path(out,paste0("R1_Catalogue_recovery.",ext)),p,width=14,height=9.5,dpi=300)
 
-stats<-read("PERMANOVA_all_catalogues") %>% filter(breadth==.5,technical_adjustment=="detected_MAG_count") %>%
+stats<-read_catalogue_fits("PERMANOVA.tsv") %>% filter(breadth==.5,technical_adjustment=="detected_MAG_count") %>%
   mutate(catalogue=label_catalogue(catalogue),response=factor(response,levels=c("MAG","GMP","SCA","DCP")),
     term=factor(term,levels=c("season","basin")),nominal=P_exact<.05)
 p5<-ggplot(stats,aes(R2,catalogue))+
@@ -49,7 +54,7 @@ for(ext in c("pdf","svg","png"))ggsave(file.path(out,paste0("R1_Assembly_ecologi
 
 # Grid and filled-circle component adapted from the archived project example
 # labelled PlotCase 多分组气泡热图. No case discovery or application-asset reading.
-effects<-read("module_basin_contrasts") %>% filter(response=="GMP",breadth==.5)
+effects<-read_catalogue_fits("module_basin_contrasts.tsv") %>% filter(response=="GMP",breadth==.5)
 top<-effects %>% filter(catalogue=="archival_original269") %>% arrange(desc(abs(north_minus_south))) %>% slice_head(n=12) %>% pull(module)
 # Display names retained from the final Figure 3 source; identifiers stay in tables.
 module_labels<-c(Salt_Trk_Ktr_core="Trk/Ktr marker (K03498)",
