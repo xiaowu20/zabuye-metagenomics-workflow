@@ -1,6 +1,6 @@
 # Zabuye metagenomics workflow
 
-Code for *Multilevel metagenomics distinguishes community restructuring, genome-resolved functional redistribution and lineage-associated proteome acidity in a hypersaline lake on the Tibetan Plateau*. The analysis starts with 35 physical libraries from Zabuye Salt Lake and Dangxiong Co. Four grouped assemblies yielded the study catalogue. The primary within-Zabuye comparisons use seven stations sampled on both 2 April and 2 October 2023. Summer and winter basin composites have a descriptive role.
+Code for *Multilevel metagenomics distinguishes community turnover, genome-resolved functional redistribution and lineage-associated proteome acidity in a hypersaline lake on the Tibetan Plateau*. The analysis starts with 35 physical libraries from Zabuye Salt Lake and Dangxiong Co. Four grouped assemblies yielded the study catalogue. The primary within-Zabuye comparisons use seven stations sampled on both 2 April and 2 October 2023. Summer and winter basin composites have a descriptive role.
 
 The repository contains study code, software specifications and run instructions under the MIT licence. Study data, databases, plot inputs and figures are distributed separately. Use a sibling directory for inputs, outputs and compute workspaces. [中文使用说明](docs/quickstart-zh.md)
 
@@ -9,7 +9,7 @@ The repository contains study code, software specifications and run instructions
 For the revision analyses alone, start with `Supplementary_Data_S5.zip`. Add S6 for the contamination-screening sensitivity figures. The main figures also use workbooks S1–S4 and the Figure 3 addendum. Download the authors’ supplements in their original formats. Staging checks the SHA-256 digest of each supplied S5/S6 ZIP and creates a new workspace.
 
 ```bash
-git clone https://github.com/xiaowu20/zabuye-metagenomics-workflow.git
+git clone --branch v1.0.0 https://github.com/xiaowu20/zabuye-metagenomics-workflow.git
 cd zabuye-metagenomics-workflow
 conda env create -f env/replay.yml
 conda activate zabuye-replay
@@ -75,4 +75,4 @@ Run the printed plan within a Linux compute allocation. The `reads` branch downl
 
 The figure runner has a separate source-table entry point. An optional Figure 1a script also draws the two lakes, relief and sampling stations from the archived map layers and S1. Field chemistry, optical measurements, historical reference files and author artwork have their own provenance. The release checks exercised downstream fits and redraws with study inputs. The computationally intensive route from all 35 raw libraries was not rerun end to end for this code release.
 
-See the [Linux and HPC run guide](docs/compute.md) for dependencies, inputs and handoffs, and the [figure index](docs/figures.md) for the route to each numbered panel. Cite the commit used when reporting a reproduction.
+See the [Linux and HPC run guide](docs/compute.md) for dependencies, inputs and handoffs, and the [figure index](docs/figures.md) for the route to each numbered panel. Cite [release v1.0.0](https://github.com/xiaowu20/zabuye-metagenomics-workflow/releases/tag/v1.0.0) when using this version.
